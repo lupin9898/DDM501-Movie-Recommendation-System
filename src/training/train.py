@@ -1,0 +1,221 @@
+"""Training pipeline with MLflow experiment tracking."""
+
+import logging
+import time
+from pathlib import Path
+from typing import Any
+
+import joblib
+import mlflow
+import numpy as np
+import pandas as pd
+
+from src.config import settings
+from src.evaluation.metrics import coverage, evaluate_model
+from src.features.interaction import build_interaction_matrix
+from src.models.baseline import PopularityRecommender, RandomRecommender
+from src.models.collaborative import ALSRecommender
+from src.models.content_based import ContentBasedRecommender
+
+log = logging.getLogger(__name__)
+
+
+def load_processed_data(data_dir: Path) -> dict[str, pd.DataFrame]:
+    """Load preprocessed parquet files."""
+    data: dict[str, pd.DataFrame] = {
+        "train": pd.read_parquet(data_dir / "train.parquet"),
+        "val": pd.read_parquet(data_dir / "val.parquet"),
+        "test": pd.read_parquet(data_dir / "test.parquet"),
+        "movies": pd.read_parquet(data_dir / "movies.parquet"),
+        "user_id_map": pd.read_parquet(data_dir / "user_id_map.parquet"),
+        "movie_id_map": pd.read_parquet(data_dir / "movie_id_map.parquet"),
+    }
+    log.info(
+        "Loaded data: train=%d, val=%d, test=%d, movies=%d",
+        len(data["train"]),
+        len(data["val"]),
+        len(data["test"]),
+        len(data["movies"]),
+    )
+    return data
+
+
+def train_and_evaluate(
+    model_type: str = "als",
+    hyperparams: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """Train a model and evaluate it, logging everything to MLflow."""
+    if hyperparams is None:
+        hyperparams = {}
+
+    data_dir = settings.data_processed_dir
+    data = load_processed_data(data_dir)
+
+    train_df = data["train"]
+    val_df = data["val"]
+    movies_df = data["movies"]
+
+    n_users = int(train_df["user_idx"].max()) + 1
+    n_items = int(train_df["movie_idx"].max()) + 1
+
+    log.info("Building interaction matrix: %d users, %d items", n_users, n_items)
+    explicit_matrix, implicit_matrix = build_interaction_matrix(
+        train_df, n_users, n_items, implicit_threshold=settings.implicit_threshold
+    )
+
+    # Select model
+    if model_type == "random":
+        model: Any = RandomRecommender()
+        model.fit(implicit_matrix)
+    elif model_type == "popular":
+        model = PopularityRecommender()
+        model.fit(implicit_matrix)
+    elif model_type == "als":
+        params = {
+            "factors": hyperparams.get("factors", settings.als_factors),
+            "regularization": hyperparams.get("regularization", settings.als_regularization),
+            "iterations": hyperparams.get("iterations", settings.als_iterations),
+            "alpha": hyperparams.get("alpha", settings.als_alpha),
+        }
+        model = ALSRecommender(**params)
+        model.fit(implicit_matrix)
+    elif model_type == "content_based":
+        from src.features.item_features import build_item_features
+
+        item_feat_df = build_item_features(train_df, movies_df)
+        genre_cols = [c for c in item_feat_df.columns if c.startswith("genre_")]
+        item_features_array = item_feat_df[genre_cols].values.astype(np.float32)
+        model = ContentBasedRecommender()
+        model.fit(explicit_matrix, item_features=item_features_array)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    # Evaluate on validation set
+    log.info("Evaluating model on validation set...")
+    k = settings.top_k
+    metrics = evaluate_model(
+        model=model,
+        test_ratings=val_df,
+        train_interaction=implicit_matrix,
+        k=k,
+        implicit_threshold=settings.implicit_threshold,
+    )
+
+    # Compute coverage
+    all_recs: list[list[int]] = []
+    sample_users = val_df["user_idx"].unique()[:500]
+    for uid in sample_users:
+        if uid < implicit_matrix.shape[0]:
+            recs = model.recommend(int(uid), n=k, exclude_seen=True)
+            all_recs.append([item_id for item_id, _ in recs])
+    metrics["coverage"] = coverage(all_recs, n_items)
+
+    log.info("Validation metrics: %s", metrics)
+    return metrics
+
+
+def run_training_pipeline(model_type: str = "als") -> None:
+    """Full training pipeline with MLflow logging."""
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    mlflow.set_experiment(settings.mlflow_experiment_name)
+
+    hyperparams: dict[str, Any] = {}
+    if model_type == "als":
+        hyperparams = {
+            "factors": settings.als_factors,
+            "regularization": settings.als_regularization,
+            "iterations": settings.als_iterations,
+            "alpha": settings.als_alpha,
+        }
+
+    with mlflow.start_run(run_name=f"{model_type}_run") as run:
+        mlflow.set_tag("model_type", model_type)
+        mlflow.set_tag("dataset_version", settings.dataset_name)
+        mlflow.set_tag("split_strategy", "temporal")
+
+        # Log hyperparameters
+        mlflow.log_params(hyperparams if hyperparams else {"model_type": model_type})
+
+        # Train and evaluate
+        start = time.time()
+        metrics = train_and_evaluate(model_type=model_type, hyperparams=hyperparams)
+        train_time = time.time() - start
+
+        # Log metrics
+        mlflow.log_metrics(metrics)
+        mlflow.log_metric("training_time_seconds", train_time)
+
+        # Save and log model artifact
+        artifacts_dir = settings.artifacts_dir
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        if model_type == "als":
+            # Re-train to save the model (or we could refactor to return model)
+            data = load_processed_data(settings.data_processed_dir)
+            train_df = data["train"]
+            n_users = int(train_df["user_idx"].max()) + 1
+            n_items = int(train_df["movie_idx"].max()) + 1
+            _, implicit_matrix = build_interaction_matrix(
+                train_df, n_users, n_items, implicit_threshold=settings.implicit_threshold
+            )
+            model = ALSRecommender(
+                factors=hyperparams["factors"],
+                regularization=hyperparams["regularization"],
+                iterations=hyperparams["iterations"],
+                alpha=hyperparams["alpha"],
+            )
+            model.fit(implicit_matrix)
+
+            artifact = {
+                "model_type": model_type,
+                "user_factors": model.user_factors,
+                "item_factors": model.item_factors,
+                "n_users": n_users,
+                "n_items": n_items,
+                "hyperparams": hyperparams,
+                "metrics": metrics,
+                "model_version": settings.model_version,
+            }
+        else:
+            artifact = {
+                "model_type": model_type,
+                "metrics": metrics,
+                "model_version": settings.model_version,
+            }
+
+        model_path = artifacts_dir / "model.pkl"
+        joblib.dump(artifact, model_path)
+        mlflow.log_artifact(str(model_path))
+
+        log.info(
+            "Training complete. Run ID: %s, Metrics: %s",
+            run.info.run_id,
+            metrics,
+        )
+
+    log.info("Model saved to %s", model_path)
+
+
+def main() -> None:
+    """Entry point for training."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train recommendation model")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="als",
+        choices=["random", "popular", "als", "content_based"],
+        help="Model type to train",
+    )
+    args = parser.parse_args()
+
+    run_training_pipeline(model_type=args.model)
+
+
+if __name__ == "__main__":
+    main()
