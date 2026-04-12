@@ -43,6 +43,11 @@ def build_interaction_matrix(
     if missing:
         raise ValueError(f"ratings DataFrame is missing columns: {missing}")
 
+    if len(ratings) == 0:
+        log.warning("Empty ratings DataFrame — returning zero matrices")
+        zero = scipy.sparse.csr_matrix((n_users, n_items), dtype=np.float32)
+        return zero, zero
+
     row = ratings["user_idx"].values.astype(np.int32)
     col = ratings["movie_idx"].values.astype(np.int32)
     rating_vals = ratings["rating"].values.astype(np.float32)
@@ -64,9 +69,13 @@ def build_interaction_matrix(
         shape=(n_users, n_items),
     )
 
+    # Filter out below-threshold entries before construction so csr_matrix
+    # does not store explicit zeros, which would incorrectly mark low-rated
+    # items as "seen" in get_user_seen_items().
     implicit_vals = (rating_vals >= implicit_threshold).astype(np.float32)
+    pos_mask = implicit_vals > 0
     implicit_matrix = scipy.sparse.csr_matrix(
-        (implicit_vals, (row, col)),
+        (implicit_vals[pos_mask], (row[pos_mask], col[pos_mask])),
         shape=(n_users, n_items),
     )
 

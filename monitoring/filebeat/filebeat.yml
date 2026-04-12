@@ -1,0 +1,27 @@
+filebeat.inputs:
+  - type: container
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - add_docker_metadata:
+          host: "unix:///var/run/docker.sock"
+
+# Only collect logs from recsys services
+processors:
+  - drop_event:
+      when:
+        not:
+          or:
+            - contains:
+                container.name: "api"
+            - contains:
+                container.name: "mlflow"
+            - contains:
+                container.name: "airflow"
+            - contains:
+                container.name: "evidently"
+
+output.logstash:
+  hosts: ["logstash:5044"]
+
+logging.level: warning

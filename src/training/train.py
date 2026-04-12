@@ -55,8 +55,10 @@ def train_and_evaluate(
     val_df = data["val"]
     movies_df = data["movies"]
 
-    n_users = int(train_df["user_idx"].max()) + 1
-    n_items = int(train_df["movie_idx"].max()) + 1
+    # Use global ID maps so n_users/n_items covers the full encoded space,
+    # not just users/items present in the train split.
+    n_users = len(data["user_id_map"])
+    n_items = len(data["movie_id_map"])
 
     log.info("Building interaction matrix: %d users, %d items", n_users, n_items)
     explicit_matrix, implicit_matrix = build_interaction_matrix(

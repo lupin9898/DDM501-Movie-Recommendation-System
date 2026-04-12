@@ -57,14 +57,23 @@ jobs:
         run: |
           IMAGE="ghcr.io/${{ env.REPO }}/recsys-api:${{ steps.tag.outputs.tag }}"
           echo "Pulling $IMAGE"
+          # Save previous image before overwriting the tag (enables real rollback)
+          docker tag recsys-api:deploy recsys-api:previous 2>/dev/null || true
           docker pull "$IMAGE"
           docker tag "$IMAGE" recsys-api:deploy
+          echo "API_IMAGE=$IMAGE" >> $GITHUB_ENV
 
       # ── Deploy với docker-compose.prod.yml ───────────────────────────────
       - name: Deploy services
         env:
-          RECSYS_MODEL_VERSION: ${{ steps.tag.outputs.tag }}
+          API_IMAGE: ${{ env.API_IMAGE }}
           GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MINIO_ROOT_USER: ${{ secrets.MINIO_ROOT_USER }}
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+          AIRFLOW_ADMIN_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+          AIRFLOW_FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
+          AIRFLOW_SECRET_KEY: ${{ secrets.AIRFLOW_SECRET_KEY }}
         run: |
           docker compose -f docker-compose.prod.yml pull --ignore-pull-failures
           docker compose -f docker-compose.prod.yml up -d --remove-orphans
@@ -92,10 +101,20 @@ jobs:
         if: failure()
         env:
           GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          MINIO_ROOT_USER: ${{ secrets.MINIO_ROOT_USER }}
+          MINIO_PASSWORD: ${{ secrets.MINIO_PASSWORD }}
+          AIRFLOW_ADMIN_PASSWORD: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+          AIRFLOW_FERNET_KEY: ${{ secrets.AIRFLOW_FERNET_KEY }}
+          AIRFLOW_SECRET_KEY: ${{ secrets.AIRFLOW_SECRET_KEY }}
         run: |
-          echo "Deploy failed — rolling back to previous container..."
+          echo "Deploy failed — rolling back to previous image..."
+          # Restore the saved previous image so compose up uses the last known-good version
+          docker tag recsys-api:previous recsys-api:deploy 2>/dev/null \
+            || echo "WARNING: No previous image saved — rollback will reuse current broken image"
           docker compose -f docker-compose.prod.yml down
-          docker compose -f docker-compose.prod.yml up -d || echo "Rollback failed — manual intervention required"
+          docker compose -f docker-compose.prod.yml up -d \
+            || echo "Rollback failed — manual intervention required"
 
       # ── Notify kết quả ───────────────────────────────────────────────────
       - name: Notify deploy result

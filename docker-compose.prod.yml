@@ -1,66 +1,334 @@
+# Full MLOps stack for Movie Recommendation System
+# Services: API, MLflow (PostgreSQL+MinIO), ELK, Prometheus, Grafana, Evidently, Airflow
+#
+# Start full stack:   docker compose -f docker-compose.prod.yml up -d
+# Start without Airflow (lighter): docker compose -f docker-compose.prod.yml up -d --scale airflow-webserver=0 --scale airflow-scheduler=0
+# SSH tunnel to internal UIs:  ssh -L 5001:localhost:5001 -L 3000:localhost:3000 -L 5601:localhost:5601 user@host
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.2
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/airflow
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?AIRFLOW_FERNET_KEY is required}
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:?AIRFLOW_SECRET_KEY is required}
+    RECSYS_DATA_RAW_DIR: /opt/airflow/data/raw
+    RECSYS_DATA_PROCESSED_DIR: /opt/airflow/data/processed
+    RECSYS_ARTIFACTS_DIR: /opt/airflow/artifacts
+    RECSYS_MLFLOW_TRACKING_URI: http://mlflow:5000
+  volumes:
+    - ./monitoring/airflow/dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+    - recsys-data:/opt/airflow/data
+    - model-data:/opt/airflow/artifacts
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks:
+    - backend
+
 services:
-  api:
-    # Dùng image đã build sẵn từ CI — không build lại tại đây
-    image: recsys-api:deploy
-    ports:
-      - "8000:8000"
+  # ────────────────────────────────────────────────────────────────────────────
+  # DATABASE — shared by MLflow and Airflow
+  # ────────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
     environment:
-      - RECSYS_MODEL_PATH=/app/artifacts/model.pkl
-      - RECSYS_LOG_LEVEL=info
-      - RECSYS_MLFLOW_TRACKING_URI=sqlite:///mlflow/mlflow.db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_MULTIPLE_DATABASES: mlflow,airflow
     volumes:
-      # Chia sẻ artifacts với trainer (model.pkl)
+      - postgres-data:/var/lib/postgresql/data
+      - ./monitoring/postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # OBJECT STORAGE — MinIO for MLflow artifacts
+  # ────────────────────────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?MINIO_PASSWORD is required}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "127.0.0.1:9000:9000"   # S3 API — needed by host training workflow
+      - "127.0.0.1:9001:9001"   # Console UI — localhost only
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - backend
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_PASSWORD:?MINIO_PASSWORD is required};
+      /usr/bin/mc mb myminio/mlflow-artifacts --ignore-existing;
+      /usr/bin/mc anonymous set download myminio/mlflow-artifacts;
+      echo 'MinIO bucket ready.';
+      "
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # ML EXPERIMENT TRACKING — MLflow with PostgreSQL + MinIO backend
+  # ────────────────────────────────────────────────────────────────────────────
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://mlflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/mlflow
+      --default-artifact-root s3://mlflow-artifacts/
+      --host 0.0.0.0
+      --port 5000
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_PASSWORD:?MINIO_PASSWORD is required}
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+    ports:
+      - "127.0.0.1:5001:5000"   # localhost only — port 5001 to avoid conflict with AirPlay/other services
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # CORE API
+  # ────────────────────────────────────────────────────────────────────────────
+  api:
+    image: ${API_IMAGE:-recsys-api:deploy}
+    ports:
+      - "8000:8000"             # Public endpoint
+    environment:
+      RECSYS_MODEL_PATH: /app/artifacts/model.pkl
+      RECSYS_DATA_PROCESSED_DIR: /app/data/processed
+      RECSYS_LOG_LEVEL: info
+      RECSYS_MLFLOW_TRACKING_URI: http://mlflow:5000
+      RECSYS_MLFLOW_EXPERIMENT_NAME: movielens-recommendation
+    volumes:
       - model-data:/app/artifacts
-      # MLflow DB dùng chung với mlflow service
-      - mlflow-data:/mlflow
+      - recsys-data:/app/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 15s
-    restart: unless-stopped
     depends_on:
       mlflow:
-        condition: service_started
-
-  mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.12.1
-    ports:
-      # Bind to localhost only — not exposed to the internet
-      - "127.0.0.1:5000:5000"
-    command: >
-      mlflow server
-      --backend-store-uri sqlite:///mlflow/mlflow.db
-      --default-artifact-root /mlflow/artifacts
-      --host 0.0.0.0
-    volumes:
-      - mlflow-data:/mlflow
+        condition: service_healthy
+    networks:
+      - backend
     restart: unless-stopped
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # DRIFT DETECTION — Evidently AI
+  # ────────────────────────────────────────────────────────────────────────────
+  evidently:
+    build:
+      context: ./monitoring/evidently
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      RECSYS_API_URL: http://api:8000
+      EVIDENTLY_REFERENCE_WINDOW: 7d
+      EVIDENTLY_DRIFT_THRESHOLD: "0.1"
+    volumes:
+      - evidently-data:/app/data
+      - recsys-data:/app/recsys-data:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # METRICS — Prometheus + Grafana
+  # ────────────────────────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:latest
-    ports:
-      - "127.0.0.1:9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - api
+    networks:
+      - backend
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?GRAFANA_PASSWORD secret is required}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
       - "127.0.0.1:3000:3000"
-    environment:
-      # GRAFANA_PASSWORD must be set — no fallback default intentionally
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD secret is required}
-    volumes:
-      - ./monitoring/grafana/:/etc/grafana/provisioning/dashboards/:ro
-      - grafana-data:/var/lib/grafana
     depends_on:
       - prometheus
+    networks:
+      - backend
     restart: unless-stopped
 
+  # ────────────────────────────────────────────────────────────────────────────
+  # LOGGING — ELK Stack (Elasticsearch + Logstash + Kibana + Filebeat)
+  # ────────────────────────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - backend
+    restart: unless-stopped
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.13.0
+    volumes:
+      - ./monitoring/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ./monitoring/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.13.0
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    ports:
+      - "127.0.0.1:5601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.13.0
+    user: root
+    command: filebeat -e -strict.perms=false
+    volumes:
+      - ./monitoring/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - logstash
+    networks:
+      - backend
+    restart: unless-stopped
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # ORCHESTRATION — Apache Airflow (LocalExecutor)
+  # ────────────────────────────────────────────────────────────────────────────
+  airflow-init:
+    <<: *airflow-common
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username admin
+          --password ${AIRFLOW_ADMIN_PASSWORD:?AIRFLOW_ADMIN_PASSWORD is required}
+          --firstname Admin --lastname User
+          --role Admin --email admin@recsys.local &&
+        echo 'Airflow initialized.'
+      "
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+# ────────────────────────────────────────────────────────────────────────────
+# VOLUMES
+# ────────────────────────────────────────────────────────────────────────────
 volumes:
+  postgres-data:
+  minio-data:
   model-data:
-  mlflow-data:
+  recsys-data:
+  evidently-data:
+  prometheus-data:
   grafana-data:
+  elasticsearch-data:
+  airflow-logs:
+
+# ────────────────────────────────────────────────────────────────────────────
+# NETWORKS
+# ────────────────────────────────────────────────────────────────────────────
+networks:
+  backend:
+    driver: bridge

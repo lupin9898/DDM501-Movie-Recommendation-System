@@ -38,3 +38,16 @@ Makefile
 .idea
 .vscode
 *.DS_Store
+
+# Secrets — never bake into image
+.env
+.env.*
+!.env.example
+
+# Dev tool caches
+.pytest_cache
+.ruff_cache
+.mypy_cache
+htmlcov/
+coverage.xml
+*.log

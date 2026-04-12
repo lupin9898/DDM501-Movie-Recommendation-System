@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from prometheus_client import (
@@ -19,7 +19,7 @@ from prometheus_client import (
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import settings
-from src.serving.recommender import RecommenderService, UnknownMovieError
+from src.serving.recommender import ModelNotLoadedError, RecommenderService, UnknownMovieError
 from src.serving.schemas import (
     BatchRecommendRequest,
     BatchRecommendResponse,
@@ -58,7 +58,7 @@ LATENCY_HISTOGRAM = Histogram(
 # ---------------------------------------------------------------------------
 
 service = RecommenderService()
-_start_time: float = 0.0
+_start_time: float = time.monotonic()  # overwritten in lifespan, but safe from the start
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +77,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         service.load(settings.model_path, settings.data_processed_dir)
         log.info("Model loaded — service is ready")
     except Exception:
-        log.warning(
-            "Model artifacts not found at %s — starting in degraded mode (health will report 'unavailable')",
+        log.exception(
+            "Failed to load model artifacts from %s — starting in degraded mode (health will report 'unavailable')",
             settings.model_path,
         )
 
@@ -192,14 +192,16 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
     endpoint = "/recommend"
 
     try:
+        # Check cold-start BEFORE recommend() so the flag is set regardless
+        # of the returned results, and to avoid accessing private attributes.
+        is_cold_start = not service.is_known_user(request.user_id)
         results = service.recommend(
             user_id=request.user_id,
             top_k=request.top_k,
             exclude_seen=request.exclude_seen,
         )
 
-        # Detect cold-start fallback: user not in mapping
-        if request.user_id not in service._user_to_idx:
+        if is_cold_start:
             COLD_START_COUNTER.inc()
 
         latency_ms = (time.perf_counter() - start) * 1000
@@ -207,6 +209,10 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
         REQUEST_COUNTER.labels(status="success", endpoint=endpoint).inc()
 
         return _build_recommend_response(request.user_id, results, latency_ms)
+
+    except ModelNotLoadedError:
+        REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
+        raise HTTPException(status_code=503, detail="Model not loaded — service is in degraded mode") from None
 
     except Exception:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
@@ -224,13 +230,14 @@ async def recommend_batch(request: BatchRecommendRequest) -> BatchRecommendRespo
         responses: list[RecommendResponse] = []
         for user_id in request.user_ids:
             start = time.perf_counter()
+            is_cold_start = not service.is_known_user(user_id)
             results = service.recommend(
                 user_id=user_id,
                 top_k=request.top_k,
                 exclude_seen=True,
             )
 
-            if user_id not in service._user_to_idx:
+            if is_cold_start:
                 COLD_START_COUNTER.inc()
 
             latency_ms = (time.perf_counter() - start) * 1000
@@ -245,6 +252,10 @@ async def recommend_batch(request: BatchRecommendRequest) -> BatchRecommendRespo
             latency_ms=round(total_latency_ms, 3),
         )
 
+    except ModelNotLoadedError:
+        REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
+        raise HTTPException(status_code=503, detail="Model not loaded — service is in degraded mode") from None
+
     except Exception:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
         log.exception("Error generating batch recommendations")
@@ -252,7 +263,9 @@ async def recommend_batch(request: BatchRecommendRequest) -> BatchRecommendRespo
 
 
 @app.get("/similar/{movie_id}", response_model=SimilarMoviesResponse)
-async def similar_movies(movie_id: int, top_k: int = 10) -> SimilarMoviesResponse:
+async def similar_movies(
+    movie_id: int, top_k: int = Query(default=10, ge=1, le=500)
+) -> SimilarMoviesResponse:
     """Find movies similar to the given movie ID."""
     start = time.perf_counter()
     endpoint = "/similar"

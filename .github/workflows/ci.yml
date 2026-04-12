@@ -52,7 +52,7 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          file: ./coverage.xml
+          files: ./coverage.xml
           fail_ci_if_error: false
 
   # ── Docker build + smoke test ─────────────────────────────────────────────
@@ -93,10 +93,10 @@ jobs:
             exit 1
           fi
 
-  # ── Push image to registry (main only) ────────────────────────────────────
+  # ── Push image to registry (main only, builds natively on self-hosted Mac) ──
   push:
     name: Push Image
-    runs-on: ubuntu-latest
+    runs-on: self-hosted          # Mac arm64 → build arm64 natively, không cần QEMU
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     permissions:
@@ -105,8 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tr portable trên macOS lẫn Linux
       - name: Lowercase repository name
-        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+        run: echo "REPO=$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -118,18 +119,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           target: server
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/arm64   # native trên Mac M-series, không cần QEMU
           tags: |
             ghcr.io/${{ env.REPO }}/recsys-api:latest
             ghcr.io/${{ env.REPO }}/recsys-api:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Smoke test the actual arm64 image that was pushed (amd64 build was tested above,
+      # this closes the gap so the deployed image is always verified)
+      - name: Smoke test arm64 image
+        run: |
+          docker pull ghcr.io/${{ env.REPO }}/recsys-api:${{ github.sha }}
+          docker run -d -p 18000:8000 --name smoke-arm64 \
+            ghcr.io/${{ env.REPO }}/recsys-api:${{ github.sha }}
+          sleep 8
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:18000/health || echo "000")
+          docker stop smoke-arm64 && docker rm smoke-arm64
+          echo "arm64 health check: $STATUS"
+          # 200 = healthy, 503 = degraded (no model) — both are valid API starts
+          if [ "$STATUS" != "200" ] && [ "$STATUS" != "503" ]; then
+            echo "Unexpected status $STATUS — arm64 image failed health check"
+            exit 1
+          fi

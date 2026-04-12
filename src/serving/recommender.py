@@ -159,6 +159,10 @@ class RecommenderService:
         if not self._loaded:
             raise ModelNotLoadedError("Model artifacts have not been loaded. Call load() first.")
 
+    def is_known_user(self, user_id: int) -> bool:
+        """Return True if user_id is in the trained user mapping."""
+        return user_id in self._user_to_idx
+
     def _compute_popular_items(
         self, top_k: int = 100
     ) -> list[dict[str, int | str | float | list[str]]]:
@@ -229,7 +233,7 @@ class RecommenderService:
 
         cache_key = (user_id, top_k, exclude_seen)
         if cache_key in self._recommend_cache:
-            return list(self._recommend_cache[cache_key])
+            return [dict(item) for item in self._recommend_cache[cache_key]]
 
         user_idx = self._user_to_idx.get(user_id)
 
@@ -239,7 +243,8 @@ class RecommenderService:
             return [dict(item) for item in self._popular_items[:top_k]]
 
         # Compute scores via dot product: user_factors[uid] @ item_factors.T
-        scores: np.ndarray = self._user_factors[user_idx] @ self._item_factors.T
+        # .copy() makes the mutation below explicit and safe regardless of numpy internals.
+        scores: np.ndarray = (self._user_factors[user_idx] @ self._item_factors.T).copy()
 
         # Exclude already-seen items by setting their scores to -inf
         if exclude_seen:
@@ -286,7 +291,7 @@ class RecommenderService:
         # Avoid division by zero
         norms = np.where(norms == 0, 1.0, norms)
 
-        similarities: np.ndarray = (self._item_factors @ target) / (norms * target_norm)
+        similarities: np.ndarray = ((self._item_factors @ target) / (norms * target_norm)).copy()
 
         # Exclude the item itself
         similarities[item_idx] = -np.inf

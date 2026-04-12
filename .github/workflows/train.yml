@@ -1,7 +1,6 @@
 name: Train
 
 on:
-  # Trigger thủ công từ GitHub UI với lựa chọn model
   workflow_dispatch:
     inputs:
       model_type:
@@ -14,6 +13,14 @@ on:
           - content_based
           - popular
           - random
+      force_preprocess:
+        description: "Force re-download data and reprocess (bỏ qua cache)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
   # Lịch tự động: mỗi Chủ nhật 02:00 UTC
   schedule:
@@ -26,10 +33,13 @@ jobs:
 
     env:
       MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
-      RECSYS_MLFLOW_TRACKING_URI: "sqlite:///mlflow/mlflow.db"
+      RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5001"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
-      RECSYS_ARTIFACTS_DIR: "/app/artifacts"
-      RECSYS_DATA_PROCESSED_DIR: "/app/data/processed"
+      # MinIO S3 credentials for MLflow artifact upload from host runner
+      AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ROOT_USER }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_PASSWORD }}
+      MLFLOW_S3_ENDPOINT_URL: "http://localhost:9000"
+      MLFLOW_S3_IGNORE_TLS: "true"
 
     steps:
       - uses: actions/checkout@v4
@@ -42,64 +52,85 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install --upgrade pip && pip install -r requirements.txt
 
-      # ── Kiểm tra dữ liệu đã được xử lý chưa ────────────────────────────
-      - name: Check processed data exists
+      # ── Đặt đường dẫn persistent trên máy host ──────────────────────────
+      # Dữ liệu và artifacts lưu ngoài workspace để tồn tại giữa các lần chạy
+      - name: Set persistent data paths
         run: |
-          PROCESSED_DIR="${RECSYS_DATA_PROCESSED_DIR:-data/processed}"
-          if [ ! -f "$PROCESSED_DIR/train.parquet" ]; then
-            echo "Processed data not found at $PROCESSED_DIR — running preprocessing first..."
-            python -m src.data.preprocessing
+          DATA_RAW="$HOME/recsys-data/raw"
+          DATA_PROCESSED="$HOME/recsys-data/processed"
+          ARTIFACTS="$HOME/recsys-artifacts"
+          mkdir -p "$DATA_RAW" "$DATA_PROCESSED" "$ARTIFACTS"
+          echo "RECSYS_DATA_RAW_DIR=$DATA_RAW"         >> $GITHUB_ENV
+          echo "RECSYS_DATA_PROCESSED_DIR=$DATA_PROCESSED" >> $GITHUB_ENV
+          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS"       >> $GITHUB_ENV
+
+      # ── Download data ─────────────────────────────────────────────────────
+      - name: Download raw data
+        run: |
+          FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
+          if [ "$FORCE" = "true" ] || [ ! -f "$RECSYS_DATA_RAW_DIR/ratings.csv" ]; then
+            echo "Downloading MovieLens dataset..."
+            python -m src.data.ingestion
           else
-            echo "Processed data found — skipping preprocessing."
+            echo "Raw data found — skipping download. (force_preprocess=false)"
           fi
 
-      # ── Chạy training ────────────────────────────────────────────────────
+      # ── Preprocess ───────────────────────────────────────────────────────
+      - name: Preprocess data
+        run: |
+          FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
+          if [ "$FORCE" = "true" ] || [ ! -f "$RECSYS_DATA_PROCESSED_DIR/train.parquet" ]; then
+            echo "Running preprocessing..."
+            python -m src.data.preprocessing
+          else
+            echo "Processed data found — skipping. (force_preprocess=false)"
+          fi
+
+      # ── Train model ──────────────────────────────────────────────────────
       - name: Train model
         run: |
           echo "Training model: $MODEL_TYPE"
           python -m src.training.train --model "$MODEL_TYPE"
 
-      # ── Đánh dấu artifact mới nhất ──────────────────────────────────────
-      - name: Tag artifact with run info
+      # ── Ghi metadata ─────────────────────────────────────────────────────
+      - name: Save model metadata
         run: |
-          ARTIFACTS_DIR="${RECSYS_ARTIFACTS_DIR:-artifacts}"
-          if [ -f "$ARTIFACTS_DIR/model.pkl" ]; then
-            echo "Artifact saved: $ARTIFACTS_DIR/model.pkl"
-            echo "Model type: $MODEL_TYPE"
-            echo "Commit: ${{ github.sha }}"
-            # Ghi metadata
-            echo "{\"model_type\": \"$MODEL_TYPE\", \"sha\": \"${{ github.sha }}\", \"run_id\": \"${{ github.run_id }}\", \"trained_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-              > "$ARTIFACTS_DIR/model_meta.json"
-          else
+          if [ ! -f "$RECSYS_ARTIFACTS_DIR/model.pkl" ]; then
             echo "ERROR: model.pkl not found after training"
             exit 1
           fi
+          echo "{\"model_type\": \"$MODEL_TYPE\", \"sha\": \"${{ github.sha }}\", \"run_id\": \"${{ github.run_id }}\", \"trained_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+            > "$RECSYS_ARTIFACTS_DIR/model_meta.json"
+          echo "Model saved: $RECSYS_ARTIFACTS_DIR/model.pkl"
 
-      # ── Khởi động lại API để load model mới ─────────────────────────────
-      - name: Reload API service
+      # ── Copy model vào container và restart API ──────────────────────────
+      - name: Deploy model to running API
         run: |
-          if docker compose -f docker-compose.prod.yml ps api | grep -q "running"; then
-            echo "Restarting API to pick up new model..."
-            docker compose -f docker-compose.prod.yml restart api
-            # Chờ API sẵn sàng
-            for i in $(seq 1 12); do
-              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
-              if [ "$STATUS" = "200" ]; then
-                echo "API reloaded successfully (attempt $i)"
-                exit 0
-              fi
-              echo "Attempt $i: status=$STATUS — retrying in 5s..."
-              sleep 5
-            done
-            echo "API failed to become healthy after reload"
-            exit 1
-          else
-            echo "API not running — skipping reload (deploy workflow will pick up artifact)"
+          CONTAINER=$(docker compose -f docker-compose.prod.yml ps -q api 2>/dev/null | head -1)
+          if [ -z "$CONTAINER" ]; then
+            echo "API container not running — skipping hot reload."
+            echo "Start the API first with: docker compose -f docker-compose.prod.yml up -d"
+            exit 0
           fi
+          echo "Copying model into container $CONTAINER..."
+          docker cp "$RECSYS_ARTIFACTS_DIR/model.pkl" "$CONTAINER:/app/artifacts/model.pkl"
+          docker cp "$RECSYS_DATA_PROCESSED_DIR/." "$CONTAINER:/app/data/processed/"
+          echo "Restarting API to load new model..."
+          docker restart "$CONTAINER"
+          for i in $(seq 1 12); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "API healthy after reload (attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i: status=$STATUS — retrying in 5s..."
+            sleep 5
+          done
+          echo "API did not become healthy — check logs:"
+          docker compose -f docker-compose.prod.yml logs api --tail=30
+          exit 1
 
       # ── Thông báo kết quả ────────────────────────────────────────────────
       - name: Report result

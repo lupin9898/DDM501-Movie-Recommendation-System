@@ -27,7 +27,7 @@ def precision_at_k(recommended: list[int], relevant: set[int], k: int) -> float:
     if len(top_k) == 0:
         return 0.0
     hits = sum(1 for item in top_k if item in relevant)
-    return hits / len(top_k)
+    return hits / k
 
 
 def recall_at_k(recommended: list[int], relevant: set[int], k: int) -> float:
