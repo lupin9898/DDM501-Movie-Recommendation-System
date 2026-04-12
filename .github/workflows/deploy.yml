@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lowercase repository name
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       # ── Xác định image tag ────────────────────────────────────────────────
       - name: Resolve image tag
         id: tag
@@ -51,7 +54,7 @@ jobs:
       # ── Pull image mới ────────────────────────────────────────────────────
       - name: Pull latest image
         run: |
-          IMAGE="ghcr.io/${{ github.repository }}/recsys-api:${{ steps.tag.outputs.tag }}"
+          IMAGE="ghcr.io/${{ env.REPO }}/recsys-api:${{ steps.tag.outputs.tag }}"
           echo "Pulling $IMAGE"
           docker pull "$IMAGE"
           # Gắn tag local để docker-compose.prod.yml dùng đúng

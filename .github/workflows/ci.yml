@@ -105,6 +105,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lowercase repository name
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -122,7 +125,7 @@ jobs:
           target: server
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/recsys-api:latest
-            ghcr.io/${{ github.repository }}/recsys-api:${{ github.sha }}
+            ghcr.io/${{ env.REPO }}/recsys-api:latest
+            ghcr.io/${{ env.REPO }}/recsys-api:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
