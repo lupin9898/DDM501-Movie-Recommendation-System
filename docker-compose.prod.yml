@@ -23,8 +23,8 @@ x-airflow-common: &airflow-common
     - recsys-data:/opt/airflow/data
     - model-data:/opt/airflow/artifacts
   depends_on:
-    postgres:
-      condition: service_healthy
+    postgres-init:
+      condition: service_completed_successfully
   networks:
     - backend
 
@@ -89,10 +89,45 @@ services:
       - backend
 
   # ────────────────────────────────────────────────────────────────────────────
+  # POSTGRES INIT — idempotent user/DB sync on every deploy
+  # Runs after postgres healthy; replaces one-shot init script for credentials.
+  # ────────────────────────────────────────────────────────────────────────────
+  postgres-init:
+    image: postgres:16-alpine
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        PG="psql -h postgres -U postgres"
+        $$PG -c "CREATE USER mlflow WITH PASSWORD '$$DB_PASSWORD';" 2>/dev/null || true
+        $$PG -c "ALTER USER mlflow WITH PASSWORD '$$DB_PASSWORD';"
+        $$PG -tc "SELECT 1 FROM pg_database WHERE datname='mlflow'" | grep -q 1 \
+          || $$PG -c "CREATE DATABASE mlflow OWNER mlflow;"
+        $$PG -c "GRANT ALL PRIVILEGES ON DATABASE mlflow TO mlflow;"
+        $$PG -c "CREATE USER airflow WITH PASSWORD '$$DB_PASSWORD';" 2>/dev/null || true
+        $$PG -c "ALTER USER airflow WITH PASSWORD '$$DB_PASSWORD';"
+        $$PG -tc "SELECT 1 FROM pg_database WHERE datname='airflow'" | grep -q 1 \
+          || $$PG -c "CREATE DATABASE airflow OWNER airflow;"
+        $$PG -c "GRANT ALL PRIVILEGES ON DATABASE airflow TO airflow;"
+        echo "Postgres users and databases ready."
+    restart: "no"
+    networks:
+      - backend
+
+  # ────────────────────────────────────────────────────────────────────────────
   # ML EXPERIMENT TRACKING — MLflow with PostgreSQL + MinIO backend
   # ────────────────────────────────────────────────────────────────────────────
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.12.1
+    build:
+      context: ./monitoring/mlflow
+      dockerfile: Dockerfile
     command: >
       mlflow server
       --backend-store-uri postgresql://mlflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/mlflow
@@ -107,8 +142,8 @@ services:
     ports:
       - "127.0.0.1:5000:5000"   # localhost only
     depends_on:
-      postgres:
-        condition: service_healthy
+      postgres-init:
+        condition: service_completed_successfully
       minio-init:
         condition: service_completed_successfully
     healthcheck:
