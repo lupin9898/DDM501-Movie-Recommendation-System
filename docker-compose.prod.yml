@@ -311,16 +311,20 @@ services:
   # ────────────────────────────────────────────────────────────────────────────
   airflow-init:
     <<: *airflow-common
-    command: >
-      bash -c "
-        airflow db migrate &&
-        airflow users create
-          --username admin
-          --password ${AIRFLOW_ADMIN_PASSWORD:?AIRFLOW_ADMIN_PASSWORD is required}
-          --firstname Admin --lastname User
-          --role Admin --email admin@recsys.local &&
-        echo 'Airflow initialized.'
-      "
+    # Use /bin/bash entrypoint to bypass Airflow's custom /entrypoint which
+    # rejects non-airflow commands (e.g. /bin/sh) with exit 127 when docker-compose
+    # wraps a string `command:` in `/bin/sh -c`. We re-invoke /entrypoint explicitly
+    # so it handles DB migration and user creation via env vars (official approach).
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - exec /entrypoint airflow version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?AIRFLOW_ADMIN_PASSWORD is required}
     restart: "no"
 
   airflow-webserver:
