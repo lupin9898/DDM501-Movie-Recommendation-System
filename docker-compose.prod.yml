@@ -27,7 +27,8 @@ services:
   mlflow:
     image: ghcr.io/mlflow/mlflow:v2.12.1
     ports:
-      - "5000:5000"
+      # Bind to localhost only — not exposed to the internet
+      - "127.0.0.1:5000:5000"
     command: >
       mlflow server
       --backend-store-uri sqlite:///mlflow/mlflow.db
@@ -40,7 +41,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     restart: unless-stopped
@@ -48,9 +49,10 @@ services:
   grafana:
     image: grafana/grafana:latest
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      # GRAFANA_PASSWORD must be set — no fallback default intentionally
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:?GRAFANA_PASSWORD secret is required}
     volumes:
       - ./monitoring/grafana/:/etc/grafana/provisioning/dashboards/:ro
       - grafana-data:/var/lib/grafana

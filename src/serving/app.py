@@ -72,9 +72,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _start_time  # noqa: PLW0603
     _start_time = time.monotonic()
 
-    log.info("Loading model artifacts...")
-    service.load(settings.model_path, settings.data_processed_dir)
-    log.info("Model loaded — service is ready")
+    try:
+        log.info("Loading model artifacts...")
+        service.load(settings.model_path, settings.data_processed_dir)
+        log.info("Model loaded — service is ready")
+    except Exception:
+        log.warning(
+            "Model artifacts not found at %s — starting in degraded mode (health will report 'unavailable')",
+            settings.model_path,
+        )
 
     yield
 

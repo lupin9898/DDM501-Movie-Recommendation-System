@@ -146,7 +146,7 @@ make docker-down
 | API | http://localhost:8000 | — |
 | MLflow | http://localhost:5000 | — |
 | Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / admin |
+| Grafana | http://localhost:3000 | admin / `$GRAFANA_PASSWORD` |
 
 ---
 

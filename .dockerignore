@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+dist/
+build/
+
+# Virtual environments
+.venv
+venv
+env
+
+# Data and artifacts — mounted at runtime via Docker volumes, never baked in
+data/
+artifacts/
+mlflow/
+
+# Notebooks — not needed in image
+notebooks/
+
+# Tests and dev tooling
+tests/
+.github/
+scripts/
+monitoring/
+*.md
+Makefile
+
+# IDE and OS
+.idea
+.vscode
+*.DS_Store
