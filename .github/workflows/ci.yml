@@ -118,12 +118,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           target: server
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/${{ env.REPO }}/recsys-api:latest
             ghcr.io/${{ env.REPO }}/recsys-api:${{ github.sha }}
