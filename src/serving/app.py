@@ -212,7 +212,9 @@ async def recommend(request: RecommendRequest) -> RecommendResponse:
 
     except ModelNotLoadedError:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
-        raise HTTPException(status_code=503, detail="Model not loaded — service is in degraded mode") from None
+        raise HTTPException(
+            status_code=503, detail="Model not loaded — service is in degraded mode"
+        ) from None
 
     except Exception:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
@@ -254,7 +256,9 @@ async def recommend_batch(request: BatchRecommendRequest) -> BatchRecommendRespo
 
     except ModelNotLoadedError:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
-        raise HTTPException(status_code=503, detail="Model not loaded — service is in degraded mode") from None
+        raise HTTPException(
+            status_code=503, detail="Model not loaded — service is in degraded mode"
+        ) from None
 
     except Exception:
         REQUEST_COUNTER.labels(status="error", endpoint=endpoint).inc()
