@@ -50,7 +50,9 @@ def _extract_genre_columns(movies: pd.DataFrame) -> list[str]:
 
     all_genres: set[str] = set()
     for entry in movies["genres"].dropna():
-        all_genres.update(g.strip() for g in str(entry).split("|") if g.strip() != "(no genres listed)")
+        all_genres.update(
+            g.strip() for g in str(entry).split("|") if g.strip() != "(no genres listed)"
+        )
 
     genre_list = sorted(all_genres)
     for genre in genre_list:

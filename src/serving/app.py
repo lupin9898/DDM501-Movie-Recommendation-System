@@ -11,12 +11,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from prometheus_client import (
     Counter,
     Histogram,
     generate_latest,
 )
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.config import settings
 from src.serving.recommender import RecommenderService, UnknownMovieError
@@ -91,6 +91,7 @@ app = FastAPI(
     version=settings.model_version,
     lifespan=lifespan,
 )
+
 
 class CorrelationIdMiddleware(BaseHTTPMiddleware):
     """Attach a correlation ID to every request for end-to-end tracing."""

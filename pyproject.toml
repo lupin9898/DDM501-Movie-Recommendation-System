@@ -60,8 +60,15 @@ asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["src"]
-omit = ["tests/*"]
+omit = [
+    "tests/*",
+    # Pipeline / CLI scripts that run on real data — not unit-testable
+    "src/data/ingestion.py",
+    "src/features/item_features.py",
+    "src/features/user_features.py",
+    "src/training/train.py",
+]
 
 [tool.coverage.report]
-fail_under = 60
+fail_under = 80
 show_missing = true

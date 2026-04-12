@@ -1,6 +1,7 @@
 """Tests for recommendation models and evaluation metrics."""
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.sparse import csr_matrix
 
@@ -23,9 +24,7 @@ def small_interaction_matrix() -> csr_matrix:
 class TestBaselineModels:
     """Tests for Random and Popularity baselines."""
 
-    def test_random_recommender_length(
-        self, small_interaction_matrix: csr_matrix
-    ) -> None:
+    def test_random_recommender_length(self, small_interaction_matrix: csr_matrix) -> None:
         """Random recommender should return exactly top_k items."""
         from src.models.baseline import RandomRecommender
 
@@ -34,9 +33,7 @@ class TestBaselineModels:
         recs = model.recommend(0, n=3)
         assert len(recs) == 3
 
-    def test_random_recommender_excludes_seen(
-        self, small_interaction_matrix: csr_matrix
-    ) -> None:
+    def test_random_recommender_excludes_seen(self, small_interaction_matrix: csr_matrix) -> None:
         """Random recommender should not recommend already-seen items."""
         from src.models.baseline import RandomRecommender
 
@@ -48,9 +45,7 @@ class TestBaselineModels:
         user_seen = {0, 2, 3}
         assert rec_ids.isdisjoint(user_seen)
 
-    def test_popularity_recommender_order(
-        self, small_interaction_matrix: csr_matrix
-    ) -> None:
+    def test_popularity_recommender_order(self, small_interaction_matrix: csr_matrix) -> None:
         """Popularity recommender should return items sorted by interaction count."""
         from src.models.baseline import PopularityRecommender
 
@@ -87,9 +82,7 @@ class TestALSRecommender:
         model.fit(small_interaction_matrix)
         return model
 
-    def test_als_trains_without_error(
-        self, small_interaction_matrix: csr_matrix
-    ) -> None:
+    def test_als_trains_without_error(self, small_interaction_matrix: csr_matrix) -> None:
         """ALS model should fit without raising exceptions."""
         from src.models.collaborative import ALSRecommender
 
@@ -259,3 +252,146 @@ class TestEvaluationMetrics:
         rand_p = precision_at_k(rand_recs, relevant, k=3)
         # ALS should perform at least as well on its own training data
         assert als_p >= rand_p or als_p > 0
+
+
+# ---------------------------------------------------------------------------
+# Edge cases for point-wise metrics
+# ---------------------------------------------------------------------------
+
+
+class TestMetricsEdgeCases:
+    def test_precision_at_k_zero_k(self) -> None:
+        from src.evaluation.metrics import precision_at_k
+
+        assert precision_at_k([1, 2, 3], {1, 2, 3}, k=0) == 0.0
+
+    def test_precision_at_k_empty_recommended(self) -> None:
+        from src.evaluation.metrics import precision_at_k
+
+        assert precision_at_k([], {1, 2}, k=5) == 0.0
+
+    def test_recall_at_k_zero_k(self) -> None:
+        from src.evaluation.metrics import recall_at_k
+
+        assert recall_at_k([1, 2, 3], {1, 2}, k=0) == 0.0
+
+    def test_recall_at_k_empty_relevant(self) -> None:
+        from src.evaluation.metrics import recall_at_k
+
+        assert recall_at_k([1, 2, 3], set(), k=3) == 0.0
+
+    def test_ndcg_at_k_zero_k(self) -> None:
+        from src.evaluation.metrics import ndcg_at_k
+
+        assert ndcg_at_k([1, 2, 3], {1, 2}, k=0) == 0.0
+
+    def test_ndcg_at_k_empty_relevant(self) -> None:
+        from src.evaluation.metrics import ndcg_at_k
+
+        assert ndcg_at_k([1, 2, 3], set(), k=3) == 0.0
+
+    def test_coverage_zero_n_items(self) -> None:
+        from src.evaluation.metrics import coverage
+
+        assert coverage([[0, 1], [2]], n_items=0) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Diversity metric
+# ---------------------------------------------------------------------------
+
+
+class TestDiversityMetric:
+    def test_single_item_returns_zero(self) -> None:
+        from src.evaluation.metrics import diversity
+
+        features = np.eye(3, dtype=np.float32)
+        assert diversity([0], features) == 0.0
+
+    def test_identical_items_have_zero_diversity(self) -> None:
+        from src.evaluation.metrics import diversity
+
+        # All items share the same feature vector → cosine_sim = 1 → distance = 0
+        features = np.ones((3, 3), dtype=np.float32)
+        assert diversity([0, 1, 2], features) == pytest.approx(0.0, abs=1e-5)
+
+    def test_orthogonal_items_have_max_diversity(self) -> None:
+        from src.evaluation.metrics import diversity
+
+        # Orthogonal one-hot vectors → cosine_sim = 0 → distance = 1
+        features = np.eye(3, dtype=np.float32)
+        assert diversity([0, 1, 2], features) == pytest.approx(1.0, abs=1e-5)
+
+    def test_diversity_in_unit_range(self) -> None:
+        from src.evaluation.metrics import diversity
+
+        rng = np.random.default_rng(42)
+        features = rng.random((6, 4)).astype(np.float32)
+        d = diversity([0, 1, 2, 3], features)
+        assert 0.0 <= d <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# evaluate_model integration
+# ---------------------------------------------------------------------------
+
+
+class TestEvaluateModel:
+    def test_evaluate_returns_all_keys(self, small_interaction_matrix: csr_matrix) -> None:
+        from src.evaluation.metrics import evaluate_model
+        from src.models.baseline import PopularityRecommender
+
+        model = PopularityRecommender()
+        model.fit(small_interaction_matrix)
+
+        test_ratings = pd.DataFrame(
+            {
+                "user_idx": [0, 1, 2],
+                "movie_idx": [0, 1, 2],
+                "rating": [4.0, 4.0, 4.0],
+            }
+        )
+        results = evaluate_model(model, test_ratings, small_interaction_matrix, k=3)
+        for key in ("precision_at_k", "recall_at_k", "ndcg_at_k", "coverage", "n_users_evaluated"):
+            assert key in results
+
+    def test_evaluate_metrics_in_range(self, small_interaction_matrix: csr_matrix) -> None:
+        from src.evaluation.metrics import evaluate_model
+        from src.models.baseline import PopularityRecommender
+
+        model = PopularityRecommender()
+        model.fit(small_interaction_matrix)
+
+        test_ratings = pd.DataFrame(
+            {
+                "user_idx": [0, 1, 2, 3],
+                "movie_idx": [0, 1, 2, 4],
+                "rating": [5.0, 4.0, 4.5, 3.5],
+            }
+        )
+        results = evaluate_model(model, test_ratings, small_interaction_matrix, k=3)
+        assert 0.0 <= results["precision_at_k"] <= 1.0
+        assert 0.0 <= results["recall_at_k"] <= 1.0
+        assert 0.0 <= results["ndcg_at_k"] <= 1.0
+        assert results["n_users_evaluated"] > 0
+
+    def test_evaluate_no_relevant_items_returns_zeros(
+        self, small_interaction_matrix: csr_matrix
+    ) -> None:
+        from src.evaluation.metrics import evaluate_model
+        from src.models.baseline import PopularityRecommender
+
+        model = PopularityRecommender()
+        model.fit(small_interaction_matrix)
+
+        # All ratings below threshold → no relevant items → n_users_evaluated = 0
+        test_ratings = pd.DataFrame(
+            {
+                "user_idx": [0, 1],
+                "movie_idx": [0, 1],
+                "rating": [1.0, 1.0],
+            }
+        )
+        results = evaluate_model(model, test_ratings, small_interaction_matrix, k=3, threshold=3.5)
+        assert results["n_users_evaluated"] == 0.0
+        assert results["precision_at_k"] == 0.0

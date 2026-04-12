@@ -42,9 +42,7 @@ class TestPreprocessing:
         """Users/items below threshold should be filtered."""
         from src.data.preprocessing import filter_cold_start
 
-        filtered = filter_cold_start(
-            sample_ratings, min_user_ratings=10, min_item_ratings=5
-        )
+        filtered = filter_cold_start(sample_ratings, min_user_ratings=10, min_item_ratings=5)
         user_counts = filtered["userId"].value_counts()
         item_counts = filtered["movieId"].value_counts()
         assert user_counts.min() >= 10
@@ -148,3 +146,40 @@ class TestInteraction:
         assert seen[0] == {0, 1}
         assert seen[1] == {1}
         assert seen[2] == {2}
+
+
+# ---------------------------------------------------------------------------
+# Preprocessing edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalSplitErrors:
+    def test_zero_train_frac_raises(self, sample_ratings: pd.DataFrame) -> None:
+        from src.data.preprocessing import PreprocessingError, temporal_split
+
+        with pytest.raises(PreprocessingError):
+            temporal_split(sample_ratings, train_frac=0.0, val_frac=0.15)
+
+    def test_fracs_sum_to_one_raises(self, sample_ratings: pd.DataFrame) -> None:
+        from src.data.preprocessing import PreprocessingError, temporal_split
+
+        with pytest.raises(PreprocessingError):
+            temporal_split(sample_ratings, train_frac=0.7, val_frac=0.35)
+
+
+class TestComputeSparsity:
+    def test_zero_users_returns_one(self) -> None:
+        from src.data.preprocessing import compute_sparsity
+
+        assert compute_sparsity(100, 0, 10) == 1.0
+
+    def test_zero_items_returns_one(self) -> None:
+        from src.data.preprocessing import compute_sparsity
+
+        assert compute_sparsity(100, 10, 0) == 1.0
+
+    def test_normal_sparsity(self) -> None:
+        from src.data.preprocessing import compute_sparsity
+
+        # 10 ratings out of 4*5=20 possible → sparsity = 0.5
+        assert compute_sparsity(10, 4, 5) == pytest.approx(0.5)

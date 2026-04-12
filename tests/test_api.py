@@ -159,24 +159,18 @@ class TestRecommendEndpoint:
 
 class TestBatchRecommendEndpoint:
     def test_batch_returns_200(self, client: TestClient) -> None:
-        resp = client.post(
-            "/recommend/batch", json={"user_ids": [0, 1, 2], "top_k": 5}
-        )
+        resp = client.post("/recommend/batch", json={"user_ids": [0, 1, 2], "top_k": 5})
         assert resp.status_code == 200
 
     def test_batch_result_count(self, client: TestClient) -> None:
         user_ids = [0, 1, 2]
-        data = client.post(
-            "/recommend/batch", json={"user_ids": user_ids, "top_k": 5}
-        ).json()
+        data = client.post("/recommend/batch", json={"user_ids": user_ids, "top_k": 5}).json()
         assert "results" in data
         assert len(data["results"]) == len(user_ids)
 
     def test_batch_latency(self, client: TestClient) -> None:
         start = time.perf_counter()
-        client.post(
-            "/recommend/batch", json={"user_ids": list(range(10)), "top_k": 10}
-        )
+        client.post("/recommend/batch", json={"user_ids": list(range(10)), "top_k": 10})
         elapsed_ms = (time.perf_counter() - start) * 1000
         assert elapsed_ms < 500
 

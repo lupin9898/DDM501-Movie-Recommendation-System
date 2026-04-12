@@ -249,8 +249,12 @@ def preprocess(
     """
     raw_dir = raw_dir or settings.data_raw_dir
     processed_dir = processed_dir or settings.data_processed_dir
-    min_user_ratings = min_user_ratings if min_user_ratings is not None else settings.min_user_ratings
-    min_item_ratings = min_item_ratings if min_item_ratings is not None else settings.min_item_ratings
+    min_user_ratings = (
+        min_user_ratings if min_user_ratings is not None else settings.min_user_ratings
+    )
+    min_item_ratings = (
+        min_item_ratings if min_item_ratings is not None else settings.min_item_ratings
+    )
 
     # 1. Load
     ratings, movies, tags = load_raw_data(raw_dir)

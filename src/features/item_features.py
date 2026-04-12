@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _extract_year(title: str) -> int | None:
     """Extract the four-digit release year from a movie title string.
 
@@ -57,6 +58,7 @@ def _multi_hot_genres(movies: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 # ---------------------------------------------------------------------------
 # Tag TF-IDF
 # ---------------------------------------------------------------------------
+
 
 def build_tag_tfidf(
     tags: pd.DataFrame,
@@ -108,6 +110,7 @@ def build_tag_tfidf(
 # ---------------------------------------------------------------------------
 # Main builder
 # ---------------------------------------------------------------------------
+
 
 def build_item_features(
     ratings: pd.DataFrame,

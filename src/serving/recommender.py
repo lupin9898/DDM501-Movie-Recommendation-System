@@ -88,7 +88,11 @@ class RecommenderService:
         if user_map_path.exists():
             user_map_df = pd.read_csv(user_map_path)
             self._user_to_idx = dict(
-                zip(user_map_df["userId"].astype(int), user_map_df["user_idx"].astype(int), strict=True)
+                zip(
+                    user_map_df["userId"].astype(int),
+                    user_map_df["user_idx"].astype(int),
+                    strict=True,
+                )
             )
             log.info("Loaded user mapping: %d users", len(self._user_to_idx))
         else:
@@ -101,7 +105,11 @@ class RecommenderService:
             item_map_df = pd.read_csv(item_map_path)
             idx_col = "movie_idx" if "movie_idx" in item_map_df.columns else "item_idx"
             self._item_to_idx = dict(
-                zip(item_map_df["movieId"].astype(int), item_map_df[idx_col].astype(int), strict=True)
+                zip(
+                    item_map_df["movieId"].astype(int),
+                    item_map_df[idx_col].astype(int),
+                    strict=True,
+                )
             )
             self._idx_to_item = {v: k for k, v in self._item_to_idx.items()}
             log.info("Loaded item mapping: %d items", len(self._item_to_idx))
@@ -135,7 +143,9 @@ class RecommenderService:
                 self._user_seen = pickle.load(fh)  # noqa: S301
             log.info("Loaded user seen items for %d users", len(self._user_seen))
         else:
-            log.warning("User seen items not found at %s — exclude_seen will have no effect", seen_path)
+            log.warning(
+                "User seen items not found at %s — exclude_seen will have no effect", seen_path
+            )
 
         # --- pre-compute popular items -------------------------------------------
         self._popular_items = self._compute_popular_items(top_k=100)
@@ -149,7 +159,9 @@ class RecommenderService:
         if not self._loaded:
             raise ModelNotLoadedError("Model artifacts have not been loaded. Call load() first.")
 
-    def _compute_popular_items(self, top_k: int = 100) -> list[dict[str, int | str | float | list[str]]]:
+    def _compute_popular_items(
+        self, top_k: int = 100
+    ) -> list[dict[str, int | str | float | list[str]]]:
         """Compute popular items by counting how many users have seen each item."""
         item_counts: dict[int, int] = {}
         for seen_set in self._user_seen.values():
@@ -164,12 +176,14 @@ class RecommenderService:
             for idx in ranked_indices:
                 movie_id = self._idx_to_item.get(int(idx), int(idx))
                 meta = self._movie_meta.get(movie_id, {})
-                results.append({
-                    "movie_id": movie_id,
-                    "title": str(meta.get("title", f"Movie {movie_id}")),
-                    "score": float(norms[idx]),
-                    "genres": list(meta.get("genres", [])),
-                })
+                results.append(
+                    {
+                        "movie_id": movie_id,
+                        "title": str(meta.get("title", f"Movie {movie_id}")),
+                        "score": float(norms[idx]),
+                        "genres": list(meta.get("genres", [])),
+                    }
+                )
             return results
 
         max_count = max(item_counts.values())
@@ -179,17 +193,17 @@ class RecommenderService:
         for item_idx, count in sorted_items:
             movie_id = self._idx_to_item.get(item_idx, item_idx)
             meta = self._movie_meta.get(movie_id, {})
-            results.append({
-                "movie_id": movie_id,
-                "title": str(meta.get("title", f"Movie {movie_id}")),
-                "score": round(float(count) / max_count, 6),
-                "genres": list(meta.get("genres", [])),
-            })
+            results.append(
+                {
+                    "movie_id": movie_id,
+                    "title": str(meta.get("title", f"Movie {movie_id}")),
+                    "score": round(float(count) / max_count, 6),
+                    "genres": list(meta.get("genres", [])),
+                }
+            )
         return results
 
-    def _format_item(
-        self, item_idx: int, score: float
-    ) -> dict[str, int | str | float | list[str]]:
+    def _format_item(self, item_idx: int, score: float) -> dict[str, int | str | float | list[str]]:
         """Build a recommendation dict from an internal item index and score."""
         movie_id = self._idx_to_item.get(item_idx, item_idx)
         meta = self._movie_meta.get(movie_id, {})
@@ -286,9 +300,7 @@ class RecommenderService:
 
         return [self._format_item(int(idx), similarities[idx]) for idx in top_indices]
 
-    def get_popular_items(
-        self, top_k: int = 10
-    ) -> list[dict[str, int | str | float | list[str]]]:
+    def get_popular_items(self, top_k: int = 10) -> list[dict[str, int | str | float | list[str]]]:
         """Return most popular items as a fallback."""
         self._ensure_loaded()
         return [dict(item) for item in self._popular_items[:top_k]]

@@ -84,7 +84,8 @@ def train_and_evaluate(
 
         item_feat_df = build_item_features(train_df, movies_df)
         genre_cols = [
-            c for c in item_feat_df.columns
+            c
+            for c in item_feat_df.columns
             if c not in ("avg_rating", "num_ratings", "popularity_score", "year")
             and not c.startswith("tag_tfidf_")
         ]
