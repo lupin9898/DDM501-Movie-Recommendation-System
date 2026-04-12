@@ -3,7 +3,7 @@
 #
 # Start full stack:   docker compose -f docker-compose.prod.yml up -d
 # Start without Airflow (lighter): docker compose -f docker-compose.prod.yml up -d --scale airflow-webserver=0 --scale airflow-scheduler=0
-# SSH tunnel to internal UIs:  ssh -L 5001:localhost:5001 -L 3000:localhost:3000 -L 5601:localhost:5601 user@host
+# SSH tunnel to internal UIs:  ssh -L 5000:localhost:5000 -L 3000:localhost:3000 -L 5601:localhost:5601 user@host
 
 x-airflow-common: &airflow-common
   image: apache/airflow:2.10.2
@@ -105,7 +105,7 @@ services:
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
       MLFLOW_S3_IGNORE_TLS: "true"
     ports:
-      - "127.0.0.1:5001:5000"   # localhost only — port 5001 to avoid conflict with AirPlay/other services
+      - "127.0.0.1:5000:5000"   # localhost only
     depends_on:
       postgres:
         condition: service_healthy

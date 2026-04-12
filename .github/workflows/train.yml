@@ -33,7 +33,7 @@ jobs:
 
     env:
       MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
-      RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5001"
+      RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5000"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
       # MinIO S3 credentials for MLflow artifact upload from host runner
       AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ROOT_USER }}
