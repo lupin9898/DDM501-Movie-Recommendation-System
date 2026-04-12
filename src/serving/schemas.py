@@ -32,7 +32,7 @@ class RecommendResponse(BaseModel):
 class BatchRecommendRequest(BaseModel):
     """Request body for batch recommendations across multiple users."""
 
-    user_ids: list[int]
+    user_ids: list[int] = Field(..., min_length=1, max_length=100)
     top_k: int = Field(default=10, ge=1, le=500)
 
 

@@ -43,8 +43,8 @@ def load_processed_data(data_dir: Path) -> dict[str, pd.DataFrame]:
 def train_and_evaluate(
     model_type: str = "als",
     hyperparams: dict[str, Any] | None = None,
-) -> dict[str, float]:
-    """Train a model and evaluate it, logging everything to MLflow."""
+) -> tuple[Any, dict[str, float]]:
+    """Train a model, evaluate it, and return (model, metrics)."""
     if hyperparams is None:
         hyperparams = {}
 
@@ -83,7 +83,11 @@ def train_and_evaluate(
         from src.features.item_features import build_item_features
 
         item_feat_df = build_item_features(train_df, movies_df)
-        genre_cols = [c for c in item_feat_df.columns if c.startswith("genre_")]
+        genre_cols = [
+            c for c in item_feat_df.columns
+            if c not in ("avg_rating", "num_ratings", "popularity_score", "year")
+            and not c.startswith("tag_tfidf_")
+        ]
         item_features_array = item_feat_df[genre_cols].values.astype(np.float32)
         model = ContentBasedRecommender()
         model.fit(explicit_matrix, item_features=item_features_array)
@@ -98,7 +102,7 @@ def train_and_evaluate(
         test_ratings=val_df,
         train_interaction=implicit_matrix,
         k=k,
-        implicit_threshold=settings.implicit_threshold,
+        threshold=settings.implicit_threshold,
     )
 
     # Compute coverage
@@ -111,7 +115,7 @@ def train_and_evaluate(
     metrics["coverage"] = coverage(all_recs, n_items)
 
     log.info("Validation metrics: %s", metrics)
-    return metrics
+    return model, metrics
 
 
 def run_training_pipeline(model_type: str = "als") -> None:
@@ -138,7 +142,7 @@ def run_training_pipeline(model_type: str = "als") -> None:
 
         # Train and evaluate
         start = time.time()
-        metrics = train_and_evaluate(model_type=model_type, hyperparams=hyperparams)
+        model, metrics = train_and_evaluate(model_type=model_type, hyperparams=hyperparams)
         train_time = time.time() - start
 
         # Log metrics
@@ -150,28 +154,23 @@ def run_training_pipeline(model_type: str = "als") -> None:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
         if model_type == "als":
-            # Re-train to save the model (or we could refactor to return model)
-            data = load_processed_data(settings.data_processed_dir)
-            train_df = data["train"]
-            n_users = int(train_df["user_idx"].max()) + 1
-            n_items = int(train_df["movie_idx"].max()) + 1
-            _, implicit_matrix = build_interaction_matrix(
-                train_df, n_users, n_items, implicit_threshold=settings.implicit_threshold
-            )
-            model = ALSRecommender(
-                factors=hyperparams["factors"],
-                regularization=hyperparams["regularization"],
-                iterations=hyperparams["iterations"],
-                alpha=hyperparams["alpha"],
-            )
-            model.fit(implicit_matrix)
-
             artifact = {
                 "model_type": model_type,
                 "user_factors": model.user_factors,
                 "item_factors": model.item_factors,
-                "n_users": n_users,
-                "n_items": n_items,
+                "n_users": model.user_factors.shape[0],
+                "n_items": model.item_factors.shape[0],
+                "hyperparams": hyperparams,
+                "metrics": metrics,
+                "model_version": settings.model_version,
+            }
+        elif model_type == "content_based":
+            artifact = {
+                "model_type": model_type,
+                "item_features": model._item_features,
+                "user_profiles": model._user_profiles,
+                "n_users": model._user_profiles.shape[0] if model._user_profiles is not None else 0,
+                "n_items": model._item_features.shape[0] if model._item_features is not None else 0,
                 "hyperparams": hyperparams,
                 "metrics": metrics,
                 "model_version": settings.model_version,

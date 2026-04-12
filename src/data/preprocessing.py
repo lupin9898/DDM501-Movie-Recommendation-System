@@ -303,11 +303,6 @@ def preprocess(
         sparsity=sparsity,
     )
     log.info("Preprocessing complete — %s", stats)
-    log.info(
-        "Sparsity: %.4f%% (%.2f%% of the user-item matrix is empty)",
-        sparsity * 100,
-        sparsity * 100,
-    )
     return stats
 
 

@@ -1,0 +1,112 @@
+name: Train
+
+on:
+  # Trigger thủ công từ GitHub UI với lựa chọn model
+  workflow_dispatch:
+    inputs:
+      model_type:
+        description: "Model type to train"
+        required: false
+        default: "als"
+        type: choice
+        options:
+          - als
+          - content_based
+          - popular
+          - random
+
+  # Lịch tự động: mỗi Chủ nhật 02:00 UTC
+  schedule:
+    - cron: "0 2 * * 0"
+
+jobs:
+  train:
+    name: Train Model (${{ github.event.inputs.model_type || 'als' }})
+    runs-on: self-hosted
+
+    env:
+      MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
+      RECSYS_MLFLOW_TRACKING_URI: "sqlite:///mlflow/mlflow.db"
+      RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
+      RECSYS_ARTIFACTS_DIR: "/app/artifacts"
+      RECSYS_DATA_PROCESSED_DIR: "/app/data/processed"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Cài dependencies ─────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Kiểm tra dữ liệu đã được xử lý chưa ────────────────────────────
+      - name: Check processed data exists
+        run: |
+          PROCESSED_DIR="${RECSYS_DATA_PROCESSED_DIR:-data/processed}"
+          if [ ! -f "$PROCESSED_DIR/train.parquet" ]; then
+            echo "Processed data not found at $PROCESSED_DIR — running preprocessing first..."
+            python -m src.data.preprocessing
+          else
+            echo "Processed data found — skipping preprocessing."
+          fi
+
+      # ── Chạy training ────────────────────────────────────────────────────
+      - name: Train model
+        run: |
+          echo "Training model: $MODEL_TYPE"
+          python -m src.training.train --model "$MODEL_TYPE"
+
+      # ── Đánh dấu artifact mới nhất ──────────────────────────────────────
+      - name: Tag artifact with run info
+        run: |
+          ARTIFACTS_DIR="${RECSYS_ARTIFACTS_DIR:-artifacts}"
+          if [ -f "$ARTIFACTS_DIR/model.pkl" ]; then
+            echo "Artifact saved: $ARTIFACTS_DIR/model.pkl"
+            echo "Model type: $MODEL_TYPE"
+            echo "Commit: ${{ github.sha }}"
+            # Ghi metadata
+            echo "{\"model_type\": \"$MODEL_TYPE\", \"sha\": \"${{ github.sha }}\", \"run_id\": \"${{ github.run_id }}\", \"trained_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+              > "$ARTIFACTS_DIR/model_meta.json"
+          else
+            echo "ERROR: model.pkl not found after training"
+            exit 1
+          fi
+
+      # ── Khởi động lại API để load model mới ─────────────────────────────
+      - name: Reload API service
+        run: |
+          if docker compose -f docker-compose.prod.yml ps api | grep -q "running"; then
+            echo "Restarting API to pick up new model..."
+            docker compose -f docker-compose.prod.yml restart api
+            # Chờ API sẵn sàng
+            for i in $(seq 1 12); do
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
+              if [ "$STATUS" = "200" ]; then
+                echo "API reloaded successfully (attempt $i)"
+                exit 0
+              fi
+              echo "Attempt $i: status=$STATUS — retrying in 5s..."
+              sleep 5
+            done
+            echo "API failed to become healthy after reload"
+            exit 1
+          else
+            echo "API not running — skipping reload (deploy workflow will pick up artifact)"
+          fi
+
+      # ── Thông báo kết quả ────────────────────────────────────────────────
+      - name: Report result
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "Training SUCCESS — model=$MODEL_TYPE sha=${{ github.sha }}"
+          else
+            echo "Training FAILED — check logs above"
+          fi

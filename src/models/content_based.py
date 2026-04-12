@@ -118,5 +118,9 @@ class ContentBasedRecommender(BaseRecommender):
             for idx in seen:
                 scores[idx] = -np.inf
 
-        top_indices = np.argsort(-scores)[:n]
+        if n < len(scores):
+            top_indices = np.argpartition(-scores, n)[:n]
+            top_indices = top_indices[np.argsort(-scores[top_indices])]
+        else:
+            top_indices = np.argsort(-scores)
         return [(int(idx), float(scores[idx])) for idx in top_indices if scores[idx] > -np.inf]

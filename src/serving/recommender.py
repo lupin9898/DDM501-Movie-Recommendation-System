@@ -11,6 +11,8 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+_RECOMMEND_CACHE_MAXSIZE = 1024
+
 
 class RecommenderServiceError(Exception):
     """Raised when the recommender service encounters an error."""
@@ -45,6 +47,9 @@ class RecommenderService:
         self._movie_meta: dict[int, dict[str, str | list[str]]] = {}
         self._user_seen: dict[int, set[int]] = {}
         self._popular_items: list[dict[str, int | str | float | list[str]]] = []
+        self._recommend_cache: dict[
+            tuple[int, int, bool], list[dict[str, int | str | float | list[str]]]
+        ] = {}
 
     @property
     def is_loaded(self) -> bool:
@@ -208,11 +213,15 @@ class RecommenderService:
         """
         self._ensure_loaded()
 
+        cache_key = (user_id, top_k, exclude_seen)
+        if cache_key in self._recommend_cache:
+            return list(self._recommend_cache[cache_key])
+
         user_idx = self._user_to_idx.get(user_id)
 
         # Cold start: unknown user -> return popular items
         if user_idx is None:
-            log.info("Unknown user_id=%d — returning popular items (cold start)", user_id)
+            log.warning("Unknown user_id=%d — returning popular items (cold start)", user_id)
             return [dict(item) for item in self._popular_items[:top_k]]
 
         # Compute scores via dot product: user_factors[uid] @ item_factors.T
@@ -233,7 +242,12 @@ class RecommenderService:
         else:
             top_indices = np.argsort(-scores)[:top_k]
 
-        return [self._format_item(int(idx), scores[idx]) for idx in top_indices]
+        result = [self._format_item(int(idx), scores[idx]) for idx in top_indices]
+
+        if len(self._recommend_cache) >= _RECOMMEND_CACHE_MAXSIZE:
+            self._recommend_cache.pop(next(iter(self._recommend_cache)))
+        self._recommend_cache[cache_key] = result
+        return list(result)
 
     def similar_items(
         self, movie_id: int, top_k: int = 10

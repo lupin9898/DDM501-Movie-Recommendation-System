@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from prometheus_client import (
     Counter,
     Histogram,
@@ -90,6 +92,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+class CorrelationIdMiddleware(BaseHTTPMiddleware):
+    """Attach a correlation ID to every request for end-to-end tracing."""
+
+    async def dispatch(self, request: Request, call_next):  # type: ignore[override]
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        log.info(
+            "Incoming %s %s [rid=%s]",
+            request.method,
+            request.url.path,
+            request_id,
+        )
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
+app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
