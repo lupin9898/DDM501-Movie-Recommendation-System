@@ -1,6 +1,6 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
-evidently>=0.4.30
+evidently>=0.4.30,<0.5.0
 pandas>=2.2.0
 numpy>=1.26.0
 prometheus-client>=0.20.0
