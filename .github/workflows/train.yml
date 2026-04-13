@@ -32,7 +32,6 @@ jobs:
     runs-on: self-hosted
 
     env:
-      AGENT_TOOLSDIRECTORY: /Users/lupin/hostedtoolcache
       MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
       RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5000"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
@@ -46,14 +45,10 @@ jobs:
       - uses: actions/checkout@v4
 
       # ── Cài dependencies ─────────────────────────────────────────────────
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
       - name: Install dependencies
-        run: pip install --upgrade pip && pip install -r requirements.txt
+        run: |
+          python3 --version
+          python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt
 
       # ── Đặt đường dẫn persistent trên máy host ──────────────────────────
       # Dữ liệu và artifacts lưu ngoài workspace để tồn tại giữa các lần chạy
