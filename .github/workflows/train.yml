@@ -32,6 +32,7 @@ jobs:
     runs-on: self-hosted
 
     env:
+      AGENT_TOOLSDIRECTORY: /Users/lupin/hostedtoolcache
       MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
       RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5000"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
