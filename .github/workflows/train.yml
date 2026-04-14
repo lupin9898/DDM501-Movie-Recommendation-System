@@ -47,8 +47,13 @@ jobs:
       # ── Cài dependencies ─────────────────────────────────────────────────
       - name: Install dependencies
         run: |
-          python3 --version
-          python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt
+          # Dùng Python 3.11 tường minh, tránh Anaconda 3.13 trên PATH
+          PY=$(command -v python3.11 || echo /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11)
+          echo "Using Python: $PY ($($PY --version))"
+          $PY -m pip install --upgrade pip
+          $PY -m pip install --retries 5 --timeout 120 -r requirements.txt
+          # Đặt python3 alias cho các bước sau
+          echo "PYTHON=$PY" >> $GITHUB_ENV
 
       # ── Đặt đường dẫn persistent trên máy host ──────────────────────────
       # Dữ liệu và artifacts lưu ngoài workspace để tồn tại giữa các lần chạy
@@ -68,7 +73,7 @@ jobs:
           FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
           if [ "$FORCE" = "true" ] || [ ! -f "$RECSYS_DATA_RAW_DIR/ratings.csv" ]; then
             echo "Downloading MovieLens dataset..."
-            python -m src.data.ingestion
+            $PYTHON -m src.data.ingestion
           else
             echo "Raw data found — skipping download. (force_preprocess=false)"
           fi
@@ -79,7 +84,7 @@ jobs:
           FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
           if [ "$FORCE" = "true" ] || [ ! -f "$RECSYS_DATA_PROCESSED_DIR/train.parquet" ]; then
             echo "Running preprocessing..."
-            python -m src.data.preprocessing
+            $PYTHON -m src.data.preprocessing
           else
             echo "Processed data found — skipping. (force_preprocess=false)"
           fi
@@ -88,7 +93,7 @@ jobs:
       - name: Train model
         run: |
           echo "Training model: $MODEL_TYPE"
-          python -m src.training.train --model "$MODEL_TYPE"
+          $PYTHON -m src.training.train --model "$MODEL_TYPE"
 
       # ── Ghi metadata ─────────────────────────────────────────────────────
       - name: Save model metadata
