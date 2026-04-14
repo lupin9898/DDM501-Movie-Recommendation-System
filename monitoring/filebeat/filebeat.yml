@@ -20,8 +20,18 @@ processors:
                 container.name: "airflow"
             - contains:
                 container.name: "evidently"
+  - decode_json_fields:
+      fields: ["message"]
+      target: "json"
+      overwrite_keys: true
+      add_error_key: true
 
-output.logstash:
-  hosts: ["logstash:5044"]
+output.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  index: "recsys-logs-%{+yyyy.MM.dd}"
+
+setup.template.name: "recsys-logs"
+setup.template.pattern: "recsys-logs-*"
+setup.ilm.enabled: false
 
 logging.level: warning

@@ -1,6 +1,6 @@
 # Movie Recommendation System
 
-Hệ thống gợi ý phim end-to-end — từ data pipeline, model training, REST API đến monitoring.
+Hệ thống gợi ý phim end-to-end — từ data pipeline, model training, REST API đến MLOps monitoring đầy đủ.
 
 **Use case:** User mở app → nhận danh sách "Recommended for you" dựa trên lịch sử rating.
 
@@ -12,34 +12,74 @@ Hệ thống gợi ý phim end-to-end — từ data pipeline, model training, RE
 |---|---|
 | Language | Python 3.11+ |
 | ML | `implicit` (ALS), scikit-learn, SciPy |
-| Experiment Tracking | MLflow |
 | API | FastAPI + Uvicorn |
-| Data | Pandas, NumPy, Parquet |
-| Container | Docker + docker-compose |
-| Monitoring | Prometheus + Grafana |
-| Testing / Lint | pytest, ruff |
-| CI/CD | GitHub Actions |
+| Experiment Tracking | MLflow (PostgreSQL + MinIO backend) |
+| Orchestration | Apache Airflow (LocalExecutor) |
+| Drift Detection | Evidently AI |
+| Metrics | Prometheus + Grafana |
+| Log Shipping | Filebeat → Elasticsearch → Kibana |
+| Object Storage | MinIO (S3-compatible) |
+| Database | PostgreSQL 16 (MLflow + Airflow metadata) |
+| Container | Docker + Docker Compose |
+| CI/CD | GitHub Actions (self-hosted runner, Mac arm64) |
+| Testing / Lint | pytest, ruff, mypy |
 
 ---
 
-## Cài đặt
+## Quick Start (Local)
 
 ```bash
 git clone <repo-url>
-cd movie-recommendation-system
+cd DDM501-Movie-Recommendation-System
 
+cp .env.example .env        # đổi mọi "changeme" trong .env trước khi chạy
+
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Để bỏ Airflow (nhẹ hơn khi dev):
+
+```bash
+docker compose -f docker-compose.prod.yml up -d \
+  --scale airflow-webserver=0 --scale airflow-scheduler=0
+```
+
+### Service URLs
+
+| Service | URL | Đăng nhập |
+|---|---|---|
+| API | http://localhost:8000 | — |
+| API Docs | http://localhost:8000/docs | — |
+| MLflow | http://localhost:5000 | — |
+| MinIO Console | http://localhost:9001 | `MINIO_ROOT_USER` / `MINIO_PASSWORD` |
+| Grafana | http://localhost:3000 | admin / `GRAFANA_PASSWORD` |
+| Kibana | http://localhost:5601 | — |
+| Prometheus | http://localhost:9090 | — |
+| Airflow | http://localhost:8080 | admin / `AIRFLOW_ADMIN_PASSWORD` |
+| Evidently | http://localhost:8001 | — |
+
+> **Remote server:** Dùng SSH tunnel trước:
+> ```bash
+> ssh -L 5000:localhost:5000 -L 3000:localhost:3000 -L 5601:localhost:5601 -L 8080:localhost:8080 user@host
+> ```
+
+---
+
+## Local Development (không Docker)
+
+```bash
 python -m venv .venv
 source .venv/bin/activate       # Windows: .venv\Scripts\activate
 
 pip install -r requirements.txt -r requirements-test.txt
-cp .env.example .env            # tuỳ chỉnh nếu cần
+cp .env.example .env
 ```
 
 ---
 
 ## Dữ liệu
 
-Đặt `movies.csv` và `ratings.csv` vào thư mục `data/raw/`, sau đó chạy:
+Đặt `movies.csv` và `ratings.csv` vào `data/raw/`, sau đó chạy:
 
 ```bash
 python -m src.data.preprocessing
@@ -72,14 +112,11 @@ python -m src.training.train --model als
 python -m src.training.train --model popular
 python -m src.training.train --model content_based
 
-# Train tất cả để so sánh
-make train-all
-
-# Xem kết quả trên MLflow UI
-make mlflow-ui          # mở http://localhost:5000
+# Xem kết quả
+open http://localhost:5000   # MLflow UI
 ```
 
-Model artifact được lưu vào `artifacts/model.pkl`.
+Model artifact lưu vào `artifacts/model.pkl` (và `~/recsys-artifacts/` khi chạy qua CI).
 
 ### Benchmark (ml-latest-small)
 
@@ -94,12 +131,8 @@ Model artifact được lưu vào `artifacts/model.pkl`.
 ## API
 
 ```bash
-make serve
-# hoặc
 uvicorn src.serving.app:app --reload --port 8000
 ```
-
-Swagger UI: `http://localhost:8000/docs`
 
 ### Endpoints
 
@@ -133,32 +166,13 @@ curl -X POST http://localhost:8000/recommend \
 
 ---
 
-## Full Stack (Docker)
-
-```bash
-make docker-up          # build + start tất cả services
-docker-compose logs -f api
-make docker-down
-```
-
-| Service | URL | Thông tin đăng nhập |
-|---|---|---|
-| API | http://localhost:8000 | — |
-| MLflow | http://localhost:5000 | — |
-| Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / `$GRAFANA_PASSWORD` |
-
----
-
 ## Tests
 
 ```bash
-make test                               # toàn bộ tests + coverage
-pytest tests/ -x -q                     # dừng tại lỗi đầu tiên
-pytest tests/test_api.py -v             # chỉ API tests
+pytest tests/ -v --cov=src --cov-fail-under=80   # toàn bộ + coverage
+pytest tests/ -x -q                               # dừng tại lỗi đầu tiên
+pytest tests/test_api.py -v                       # chỉ API tests
 ```
-
-44 tests — data pipeline, models, evaluation metrics, API endpoints.
 
 ---
 
@@ -167,22 +181,59 @@ pytest tests/test_api.py -v             # chỉ API tests
 ```bash
 ruff check src/ tests/ --fix    # lint + auto-fix
 ruff format src/ tests/         # format
-make lint-check                 # CI mode (không sửa)
+mypy src/                       # type check
 ```
+
+---
+
+## Automated Retraining
+
+Hệ thống có hai cách trigger retrain:
+
+### 1. GitHub Actions (train.yml)
+- **Tự động:** mỗi Chủ nhật 02:00 UTC
+- **Thủ công:** GitHub UI → Actions → Train → Run workflow
+
+Workflow sẽ: download data → preprocess → train → copy model vào container đang chạy → restart API.
+
+### 2. Airflow DAG
+- UI: http://localhost:8080 (admin / `AIRFLOW_ADMIN_PASSWORD`)
+- DAG `retrain_pipeline` trigger pipeline training nội bộ trong Docker network
+- Phù hợp để schedule theo giờ/ngày hoặc trigger theo sự kiện drift
+
+---
+
+## CI/CD
+
+Ba GitHub Actions workflows:
+
+| Workflow | Trigger | Mô tả |
+|---|---|---|
+| `ci.yml` | push `main`/`develop`, PR | lint → test (≥80% coverage) → Docker build + smoke test → push image lên `ghcr.io` |
+| `deploy.yml` | sau khi CI pass trên `main` (hoặc manual) | pull image → `docker compose up` → health check → auto-rollback nếu fail |
+| `train.yml` | mỗi Chủ nhật 02:00 UTC (hoặc manual) | download → preprocess → train → hot-reload model vào API |
+
+**Image registry:** `ghcr.io/<org>/recsys-api` (arm64, build native trên self-hosted Mac M-series)
+
+**Secrets cần set trong GitHub repo:**
+
+```
+GRAFANA_PASSWORD, POSTGRES_PASSWORD, MINIO_ROOT_USER, MINIO_PASSWORD,
+AIRFLOW_ADMIN_PASSWORD, AIRFLOW_FERNET_KEY, AIRFLOW_SECRET_KEY
+```
+
+> Xem [RUNNER_SETUP.md](RUNNER_SETUP.md) để cài đặt self-hosted runner.
 
 ---
 
 ## Cấu trúc Project
 
 ```
-├── data/
-│   ├── raw/               # CSV đầu vào (không commit)
-│   └── processed/         # Parquet sau preprocessing (không commit)
 ├── src/
-│   ├── config.py          # Settings tập trung (pydantic-settings)
+│   ├── config.py              # Settings tập trung (pydantic-settings)
 │   ├── data/
 │   │   ├── ingestion.py       # Download & validate dataset
-│   │   └── preprocessing.py  # Filter → encode → split → save
+│   │   └── preprocessing.py  # Filter → encode → split → Parquet
 │   ├── features/
 │   │   ├── user_features.py   # avg_rating, genre_preference, recency
 │   │   ├── item_features.py   # popularity, genres, TF-IDF
@@ -194,7 +245,7 @@ make lint-check                 # CI mode (không sửa)
 │   ├── evaluation/
 │   │   └── metrics.py         # Precision/Recall/NDCG@K, Coverage, Diversity
 │   ├── training/
-│   │   └── train.py           # Pipeline training + MLflow logging
+│   │   └── train.py           # Training pipeline + MLflow logging
 │   └── serving/
 │       ├── app.py             # FastAPI app
 │       ├── recommender.py     # Model loader + inference
@@ -204,39 +255,54 @@ make lint-check                 # CI mode (không sửa)
 │   ├── test_model.py
 │   └── test_api.py
 ├── monitoring/
-│   ├── prometheus.yml
-│   └── grafana/dashboard.json
-├── .github/workflows/ci-cd.yml
+│   ├── airflow/
+│   │   ├── Dockerfile
+│   │   ├── requirements.txt
+│   │   └── dags/retrain_dag.py
+│   ├── evidently/             # Drift detection service
+│   ├── filebeat/
+│   │   └── filebeat.yml       # Ships logs → Elasticsearch
+│   ├── grafana/
+│   │   └── provisioning/      # Auto-provisioned dashboards + datasources
+│   ├── logstash/              # Kept for reference (không dùng)
+│   ├── mlflow/Dockerfile
+│   ├── postgres/
+│   │   └── init-multiple-dbs.sh
+│   └── prometheus.yml
+├── notebooks/
+│   ├── 01_eda.ipynb
+│   ├── 02_feature_engineering.ipynb
+│   └── 03_model_experiments.ipynb
+├── scripts/
+│   └── setup_runner.sh        # Script cài self-hosted runner
+├── .github/workflows/
+│   ├── ci.yml
+│   ├── deploy.yml
+│   └── train.yml
 ├── Dockerfile
-├── docker-compose.yml
-├── Makefile
+├── docker-compose.yml         # Dev stack (API + MLflow nhẹ)
+├── docker-compose.prod.yml    # Full production stack
 ├── pyproject.toml
-└── .env.example
+├── requirements.txt
+├── requirements-serve.txt
+├── requirements-test.txt
+├── .env.example
+└── RUNNER_SETUP.md
 ```
 
 ---
 
 ## Biến môi trường
 
-Xem [.env.example](.env.example). Các biến thường dùng:
+Xem [.env.example](.env.example) — copy và đổi tất cả `changeme` trước khi chạy.
 
-```bash
-RECSYS_ALS_FACTORS=100
-RECSYS_ALS_ITERATIONS=30
-RECSYS_ALS_ALPHA=40.0
-RECSYS_IMPLICIT_THRESHOLD=3.5
-RECSYS_MODEL_VERSION=als_v1
-RECSYS_MLFLOW_TRACKING_URI=sqlite:///mlflow.db
-```
-
----
-
-## CI/CD
-
-GitHub Actions (`.github/workflows/ci-cd.yml`):
-
-1. **test** — ruff lint + pytest + upload coverage
-2. **build** — Docker build + smoke test
-3. **deploy** *(main only)* — push image lên `ghcr.io`
-
-Cần set secret `REGISTRY_TOKEN` trong GitHub repo settings.
+| Biến | Bắt buộc | Mô tả |
+|---|---|---|
+| `POSTGRES_PASSWORD` | Có | Dùng chung cho MLflow + Airflow |
+| `MINIO_ROOT_USER` | Có | MinIO admin username |
+| `MINIO_PASSWORD` | Có | MinIO admin password |
+| `GRAFANA_PASSWORD` | Có | Grafana admin password |
+| `AIRFLOW_ADMIN_PASSWORD` | Có | Airflow web UI |
+| `AIRFLOW_FERNET_KEY` | Có | Mã hoá connections trong DB |
+| `AIRFLOW_SECRET_KEY` | Có | Session secret cho webserver |
+| `API_IMAGE` | Không | Pre-built image (bỏ trống để build từ Dockerfile) |

@@ -6,6 +6,7 @@ import logging
 import pickle
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -72,8 +73,8 @@ class RecommenderService:
         if not model_path.exists():
             raise RecommenderServiceError(f"Model file not found: {model_path}")
 
-        with model_path.open("rb") as fh:
-            model_data: dict[str, np.ndarray] = pickle.load(fh)  # noqa: S301
+        # Saved by joblib.dump() in train.py
+        model_data: dict[str, np.ndarray] = joblib.load(model_path)
 
         self._user_factors = model_data["user_factors"]
         self._item_factors = model_data["item_factors"]
@@ -83,14 +84,14 @@ class RecommenderService:
             self._item_factors.shape,
         )
 
-        # --- user mapping --------------------------------------------------------
-        user_map_path = data_dir / "user_mapping.csv"
+        # --- user mapping (user_id_map.parquet: original_id → encoded_id) --------
+        user_map_path = data_dir / "user_id_map.parquet"
         if user_map_path.exists():
-            user_map_df = pd.read_csv(user_map_path)
+            user_map_df = pd.read_parquet(user_map_path)
             self._user_to_idx = dict(
                 zip(
-                    user_map_df["userId"].astype(int),
-                    user_map_df["user_idx"].astype(int),
+                    user_map_df["original_id"].astype(int),
+                    user_map_df["encoded_id"].astype(int),
                     strict=True,
                 )
             )
@@ -99,15 +100,14 @@ class RecommenderService:
             log.warning("User mapping not found at %s — assuming identity mapping", user_map_path)
             self._user_to_idx = {i: i for i in range(self._user_factors.shape[0])}
 
-        # --- item mapping --------------------------------------------------------
-        item_map_path = data_dir / "item_mapping.csv"
+        # --- item mapping (movie_id_map.parquet: original_id → encoded_id) -------
+        item_map_path = data_dir / "movie_id_map.parquet"
         if item_map_path.exists():
-            item_map_df = pd.read_csv(item_map_path)
-            idx_col = "movie_idx" if "movie_idx" in item_map_df.columns else "item_idx"
+            item_map_df = pd.read_parquet(item_map_path)
             self._item_to_idx = dict(
                 zip(
-                    item_map_df["movieId"].astype(int),
-                    item_map_df[idx_col].astype(int),
+                    item_map_df["original_id"].astype(int),
+                    item_map_df["encoded_id"].astype(int),
                     strict=True,
                 )
             )
@@ -118,10 +118,10 @@ class RecommenderService:
             self._item_to_idx = {i: i for i in range(self._item_factors.shape[0])}
             self._idx_to_item = {i: i for i in range(self._item_factors.shape[0])}
 
-        # --- movie metadata ------------------------------------------------------
-        movies_path = data_dir / "movies.csv"
+        # --- movie metadata (movies.parquet: movieId, title, genres) -------------
+        movies_path = data_dir / "movies.parquet"
         if movies_path.exists():
-            movies_df = pd.read_csv(movies_path)
+            movies_df = pd.read_parquet(movies_path)
             for _, row in movies_df.iterrows():
                 mid = int(row["movieId"])
                 title = str(row.get("title", f"Movie {mid}"))
@@ -136,16 +136,22 @@ class RecommenderService:
         else:
             log.warning("Movies metadata not found at %s", movies_path)
 
-        # --- user seen items -----------------------------------------------------
+        # --- user seen items (computed from train.parquet) -----------------------
         seen_path = data_dir / "user_seen_items.pkl"
         if seen_path.exists():
             with seen_path.open("rb") as fh:
                 self._user_seen = pickle.load(fh)  # noqa: S301
             log.info("Loaded user seen items for %d users", len(self._user_seen))
         else:
-            log.warning(
-                "User seen items not found at %s — exclude_seen will have no effect", seen_path
-            )
+            train_path = data_dir / "train.parquet"
+            if train_path.exists():
+                train_df = pd.read_parquet(train_path, columns=["user_idx", "movie_idx"])
+                self._user_seen = train_df.groupby("user_idx")["movie_idx"].apply(set).to_dict()
+                log.info("Built user seen items from train.parquet: %d users", len(self._user_seen))
+            else:
+                log.warning(
+                    "User seen items not found at %s — exclude_seen will have no effect", seen_path
+                )
 
         # --- pre-compute popular items -------------------------------------------
         self._popular_items = self._compute_popular_items(top_k=100)

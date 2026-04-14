@@ -1,12 +1,28 @@
 # Full MLOps stack for Movie Recommendation System
-# Services: API, MLflow (PostgreSQL+MinIO), ELK, Prometheus, Grafana, Evidently, Airflow
+# Services: API, MLflow (PostgreSQL+MinIO), Elasticsearch+Kibana, Prometheus, Grafana, Evidently, Airflow
 #
-# Start full stack:   docker compose -f docker-compose.prod.yml up -d
-# Start without Airflow (lighter): docker compose -f docker-compose.prod.yml up -d --scale airflow-webserver=0 --scale airflow-scheduler=0
-# SSH tunnel to internal UIs:  ssh -L 5000:localhost:5000 -L 3000:localhost:3000 -L 5601:localhost:5601 user@host
+# Quick start (local):
+#   cp .env.example .env   # edit passwords, then:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Start without Airflow (lighter):
+#   docker compose -f docker-compose.prod.yml up -d \
+#     --scale airflow-webserver=0 --scale airflow-scheduler=0
+#
+# UI access (local):  http://localhost:PORT directly in browser
+#   MLflow   → http://localhost:5000
+#   Grafana  → http://localhost:3000   (admin / GRAFANA_PASSWORD)
+#   Kibana   → http://localhost:5601
+#   Airflow  → http://localhost:8080   (admin / AIRFLOW_ADMIN_PASSWORD)
+#   MinIO    → http://localhost:9001
+#
+# Remote server: SSH tunnel first
+#   ssh -L 5000:localhost:5000 -L 3000:localhost:3000 -L 5601:localhost:5601 user@host
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.2
+  build:
+    context: ./monitoring/airflow
+    dockerfile: Dockerfile
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/airflow
@@ -17,11 +33,15 @@ x-airflow-common: &airflow-common
     RECSYS_DATA_PROCESSED_DIR: /opt/airflow/data/processed
     RECSYS_ARTIFACTS_DIR: /opt/airflow/artifacts
     RECSYS_MLFLOW_TRACKING_URI: http://mlflow:5000
+    RECSYS_MLFLOW_EXPERIMENT_NAME: movielens-recommendation
+    PYTHONPATH: /opt/airflow
   volumes:
     - ./monitoring/airflow/dags:/opt/airflow/dags:ro
+    - ./src:/opt/airflow/src:ro
     - airflow-logs:/opt/airflow/logs
     - recsys-data:/opt/airflow/data
     - model-data:/opt/airflow/artifacts
+    - /var/run/docker.sock:/var/run/docker.sock:ro
   depends_on:
     postgres-init:
       condition: service_completed_successfully
@@ -159,10 +179,13 @@ services:
     restart: unless-stopped
 
   # ────────────────────────────────────────────────────────────────────────────
-  # CORE API
+  # CORE API — builds from source if API_IMAGE is not set
   # ────────────────────────────────────────────────────────────────────────────
   api:
-    image: ${API_IMAGE:-recsys-api:deploy}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${API_IMAGE:-recsys-api:local}
     ports:
       - "8000:8000"             # Public endpoint
     environment:
@@ -249,7 +272,8 @@ services:
     restart: unless-stopped
 
   # ────────────────────────────────────────────────────────────────────────────
-  # LOGGING — ELK Stack (Elasticsearch + Logstash + Kibana + Filebeat)
+  # LOGGING — Elasticsearch + Kibana + Filebeat (no Logstash)
+  # Filebeat ships logs directly to Elasticsearch
   # ────────────────────────────────────────────────────────────────────────────
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
@@ -265,18 +289,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    networks:
-      - backend
-    restart: unless-stopped
-
-  logstash:
-    image: docker.elastic.co/logstash/logstash:8.13.0
-    volumes:
-      - ./monitoring/logstash/pipeline:/usr/share/logstash/pipeline:ro
-      - ./monitoring/logstash/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
     networks:
       - backend
     restart: unless-stopped
@@ -303,7 +315,8 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
-      - logstash
+      elasticsearch:
+        condition: service_healthy
     networks:
       - backend
     restart: unless-stopped

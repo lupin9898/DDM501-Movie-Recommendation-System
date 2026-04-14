@@ -22,18 +22,50 @@ default_args = {
 }
 
 
+# ── Branch helpers ──────────────────────────────────────────────────────────
+
+
 def check_raw_data(**ctx: dict) -> str:
-    """Branch: download data if missing, else skip."""
+    """Branch: download data if missing, else skip to processed check."""
     if not (DATA_RAW / "ratings.csv").exists():
         return "download_data"
     return "check_processed_data"
 
 
 def check_processed_data(**ctx: dict) -> str:
-    """Branch: preprocess if missing, else skip."""
+    """Branch: preprocess if missing, else skip straight to training."""
     if not (DATA_PROCESSED / "train.parquet").exists():
         return "preprocess_data"
     return "train_model"
+
+
+# ── API reload ──────────────────────────────────────────────────────────────
+
+
+def reload_api(**ctx: dict) -> None:
+    """Restart the API container so it picks up the new model.pkl.
+
+    model.pkl is written to the shared Docker volume (model-data) which is
+    mounted at /opt/airflow/artifacts here and /app/artifacts in the API
+    container — no docker cp needed, only a restart.
+    """
+    import docker  # installed via monitoring/airflow/requirements.txt
+
+    client = docker.from_env()
+    # Find by compose service label — works regardless of project/container name
+    containers = client.containers.list(
+        filters={"label": "com.docker.compose.service=api"}
+    )
+    if not containers:
+        print("API container not running — skipping reload")
+        return
+    api_container = containers[0]
+    print(f"Restarting API container: {api_container.name}")
+    api_container.restart(timeout=30)
+    print("API restarted — new model will be loaded on startup")
+
+
+# ── DAG definition ──────────────────────────────────────────────────────────
 
 
 with DAG(
@@ -73,22 +105,13 @@ with DAG(
         trigger_rule="none_failed_min_one_success",
     )
 
-    reload_api = BashOperator(
+    reload_api_task = PythonOperator(
         task_id="reload_api",
-        bash_command="""
-            CONTAINER=$(docker ps --filter "name=api" --format "{{.ID}}" | head -1)
-            if [ -n "$CONTAINER" ]; then
-                docker cp {{ var.value.get('artifacts_dir', '/opt/airflow/artifacts') }}/model.pkl $CONTAINER:/app/artifacts/model.pkl
-                docker restart $CONTAINER
-                echo "API reloaded."
-            else
-                echo "API not running — skipping reload."
-            fi
-        """,
+        python_callable=reload_api,
     )
 
     check_raw >> download_data >> check_processed
     check_raw >> check_processed
     check_processed >> preprocess_data >> train_model
     check_processed >> train_model
-    train_model >> reload_api
+    train_model >> reload_api_task
