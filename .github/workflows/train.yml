@@ -35,11 +35,7 @@ jobs:
       MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
       RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5000"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
-      # MinIO S3 credentials for MLflow artifact upload from host runner
-      AWS_ACCESS_KEY_ID: ${{ secrets.MINIO_ROOT_USER }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.MINIO_PASSWORD }}
-      MLFLOW_S3_ENDPOINT_URL: "http://localhost:9000"
-      MLFLOW_S3_IGNORE_TLS: "true"
+      # --serve-artifacts on MLflow server proxies artifact uploads → runner không cần S3 credentials
 
     steps:
       - uses: actions/checkout@v4
