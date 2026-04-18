@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import pickle
 from pathlib import Path
 
 import joblib
@@ -137,16 +136,25 @@ class RecommenderService:
             log.warning("Movies metadata not found at %s", movies_path)
 
         # --- user seen items (computed from train.parquet) -----------------------
-        seen_path = data_dir / "user_seen_items.pkl"
+        # Prefer joblib (sandboxed loader, matches how the model was serialized)
+        # so we don't fall back to unsafe stdlib pickle for this artifact.
+        seen_path = data_dir / "user_seen_items.joblib"
+        legacy_seen_path = data_dir / "user_seen_items.pkl"
         if seen_path.exists():
-            with seen_path.open("rb") as fh:
-                self._user_seen = pickle.load(fh)  # noqa: S301
+            self._user_seen = joblib.load(seen_path)
             log.info("Loaded user seen items for %d users", len(self._user_seen))
+        elif legacy_seen_path.exists():
+            self._user_seen = joblib.load(legacy_seen_path)
+            log.info(
+                "Loaded user seen items from legacy .pkl for %d users — migrate to .joblib",
+                len(self._user_seen),
+            )
         else:
             train_path = data_dir / "train.parquet"
             if train_path.exists():
                 train_df = pd.read_parquet(train_path, columns=["user_idx", "movie_idx"])
-                self._user_seen = train_df.groupby("user_idx")["movie_idx"].apply(set).to_dict()
+                grouped = train_df.groupby("user_idx")["movie_idx"].apply(set).to_dict()
+                self._user_seen = {int(k): {int(x) for x in v} for k, v in grouped.items()}
                 log.info("Built user seen items from train.parquet: %d users", len(self._user_seen))
             else:
                 log.warning(

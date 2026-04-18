@@ -168,12 +168,14 @@ def run_training_pipeline(model_type: str = "als") -> None:
                 "model_version": settings.model_version,
             }
         elif model_type == "content_based":
+            item_features = model.item_features
+            user_profiles = model.user_profiles
             artifact = {
                 "model_type": model_type,
-                "item_features": model._item_features,
-                "user_profiles": model._user_profiles,
-                "n_users": model._user_profiles.shape[0] if model._user_profiles is not None else 0,
-                "n_items": model._item_features.shape[0] if model._item_features is not None else 0,
+                "item_features": item_features,
+                "user_profiles": user_profiles,
+                "n_users": user_profiles.shape[0] if user_profiles is not None else 0,
+                "n_items": item_features.shape[0] if item_features is not None else 0,
                 "hyperparams": hyperparams,
                 "metrics": metrics,
                 "model_version": settings.model_version,

@@ -6,8 +6,8 @@ filebeat.inputs:
       - add_docker_metadata:
           host: "unix:///var/run/docker.sock"
 
-# Only collect logs from recsys services
 processors:
+  # Only keep logs from recsys services
   - drop_event:
       when:
         not:
@@ -20,11 +20,23 @@ processors:
                 container.name: "airflow"
             - contains:
                 container.name: "evidently"
+
+  # Parse JSON messages produced by FastAPI / Evidently into top-level fields.
+  # When the log line is NOT JSON (e.g. Airflow plain text), add_error_key sets
+  # `error.message` so we can still search by `container.name` / `message`.
   - decode_json_fields:
       fields: ["message"]
-      target: "json"
+      target: ""
       overwrite_keys: true
       add_error_key: true
+      max_depth: 3
+
+  # Drop internal filebeat heartbeat noise
+  - drop_event:
+      when:
+        contains:
+          agent.type: "filebeat"
+          message: "filebeat"
 
 output.elasticsearch:
   hosts: ["elasticsearch:9200"]
@@ -32,6 +44,9 @@ output.elasticsearch:
 
 setup.template.name: "recsys-logs"
 setup.template.pattern: "recsys-logs-*"
+setup.template.settings:
+  index.number_of_shards: 1
+  index.number_of_replicas: 0
 setup.ilm.enabled: false
 
 logging.level: warning

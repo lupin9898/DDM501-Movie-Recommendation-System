@@ -2,22 +2,84 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import uvicorn
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from evidently.metric_preset import DataDriftPreset
 from evidently.report import Report
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from prometheus_client import Counter, Gauge, generate_latest
+from pythonjsonlogger import jsonlogger
+
+
+def _configure_logging() -> None:
+    formatter = jsonlogger.JsonFormatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s",
+        rename_fields={"levelname": "level", "name": "logger", "asctime": "timestamp"},
+    )
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        lg = logging.getLogger(name)
+        lg.handlers = [handler]
+        lg.propagate = False
+
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Evidently Drift Detection", version="1.0.0")
+DRIFT_REFRESH_INTERVAL_SECONDS = int(os.getenv("EVIDENTLY_REFRESH_INTERVAL_SECONDS", "300"))
+
+scheduler = AsyncIOScheduler()
+
+
+async def _refresh_drift_metrics_async() -> None:
+    """Run the sync drift refresh on a worker thread so the event loop stays responsive."""
+    _configure_logging()
+    await asyncio.get_running_loop().run_in_executor(None, _refresh_drift_metrics)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    _configure_logging()
+    scheduler.add_job(
+        _refresh_drift_metrics_async,
+        "interval",
+        seconds=DRIFT_REFRESH_INTERVAL_SECONDS,
+        next_run_time=None,
+        id="drift_refresh",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    log.info(
+        "drift_refresh_scheduled",
+        extra={
+            "event": "drift_refresh_scheduled",
+            "interval_seconds": DRIFT_REFRESH_INTERVAL_SECONDS,
+        },
+    )
+    try:
+        await _refresh_drift_metrics_async()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Initial drift refresh failed: %s", exc)
+    yield
+    scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="Evidently Drift Detection", version="1.0.0", lifespan=lifespan)
 
 # ── Prometheus metrics ──────────────────────────────────────────────────────
 
@@ -82,9 +144,12 @@ def metrics() -> PlainTextResponse:
     )
 
 
-@app.get("/report", response_class=HTMLResponse)
-def drift_report() -> HTMLResponse:
-    """Generate and return an HTML drift report."""
+def _compute_drift_report() -> tuple[Report, float, float]:
+    """Build an Evidently drift report and update Prometheus metrics.
+
+    Raises:
+        HTTPException: If reference data is unavailable or datasets don't share columns.
+    """
     global _last_report  # noqa: PLW0603
 
     reference = _load_reference_data()
@@ -95,21 +160,19 @@ def drift_report() -> HTMLResponse:
             status_code=503,
             detail="Reference data not available. Run preprocessing first.",
         )
+    if current is None:
+        raise HTTPException(status_code=503, detail="Current data not available.")
 
-    # Use common columns
     cols = list(set(reference.columns) & set(current.columns))
     if not cols:
         raise HTTPException(status_code=500, detail="No common columns between datasets.")
 
     report = Report(metrics=[DataDriftPreset()])
-    report.run(
-        reference_data=reference[cols],
-        current_data=current[cols],
-    )
+    report.run(reference_data=reference[cols], current_data=current[cols])
 
     result = report.as_dict()
     drift_info = result.get("metrics", [{}])[0].get("result", {})
-    drift_score = drift_info.get("dataset_drift_share", 0.0)
+    drift_score = float(drift_info.get("dataset_drift_share", 0.0))
     drift_flag = 1.0 if drift_info.get("dataset_drift", False) else 0.0
 
     DRIFT_SCORE.set(drift_score)
@@ -117,8 +180,35 @@ def drift_report() -> HTMLResponse:
     DRIFT_REPORTS_TOTAL.inc()
 
     _last_report = {"drift_score": drift_score, "drift_detected": bool(drift_flag)}
-    log.info("Drift report: score=%.3f detected=%s", drift_score, bool(drift_flag))
+    log.info(
+        "drift_report_generated",
+        extra={
+            "event": "drift_report_generated",
+            "service": "evidently",
+            "drift_score": drift_score,
+            "drift_detected": bool(drift_flag),
+            "reference_rows": int(len(reference)),
+            "current_rows": int(len(current)),
+            "common_columns": cols,
+        },
+    )
+    return report, drift_score, drift_flag
 
+
+def _refresh_drift_metrics() -> None:
+    """Scheduled job: recompute drift and update Prometheus metrics."""
+    try:
+        _compute_drift_report()
+    except HTTPException as exc:
+        log.warning("Drift refresh skipped: %s", exc.detail)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Drift refresh failed: %s", exc)
+
+
+@app.get("/report", response_class=HTMLResponse)
+def drift_report() -> HTMLResponse:
+    """Generate and return an HTML drift report."""
+    report, _, _ = _compute_drift_report()
     report_path = EVIDENTLY_DATA_DIR / "last_report.html"
     report.save_html(str(report_path))
     return HTMLResponse(content=report_path.read_text())

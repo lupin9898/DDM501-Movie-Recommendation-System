@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-import pickle
 import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any  # used in _make_fake_artifact return type
+from typing import Any
 from unittest.mock import patch
 
+import joblib
 import numpy as np
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,7 +20,11 @@ from fastapi.testclient import TestClient
 
 
 def _make_fake_artifact(tmp_path: Path) -> dict[str, Any]:
-    """Write a minimal model.pkl and supporting CSVs to tmp_path."""
+    """Write a minimal model and supporting Parquet artifacts to tmp_path.
+
+    Schema mirrors what ``src.training.train`` produces so RecommenderService
+    loads through the real code paths (not the identity-mapping fallback).
+    """
     rng = np.random.default_rng(0)
     n_users, n_items, n_factors = 10, 20, 8
 
@@ -33,62 +39,52 @@ def _make_fake_artifact(tmp_path: Path) -> dict[str, Any]:
         "metrics": {},
     }
 
-    model_path = tmp_path / "model.pkl"
-    with open(model_path, "wb") as fh:
-        pickle.dump(artifact, fh)
+    joblib.dump(artifact, tmp_path / "model.pkl")
 
-    # user mapping CSV
-    import pandas as pd
+    pd.DataFrame({"original_id": range(n_users), "encoded_id": range(n_users)}).to_parquet(
+        tmp_path / "user_id_map.parquet", index=False
+    )
 
-    pd.DataFrame({"userId": range(n_users), "user_idx": range(n_users)}).to_csv(
-        tmp_path / "user_mapping.csv", index=False
+    pd.DataFrame({"original_id": range(n_items), "encoded_id": range(n_items)}).to_parquet(
+        tmp_path / "movie_id_map.parquet", index=False
     )
-    # item mapping CSV
-    pd.DataFrame({"movieId": range(n_items), "movie_idx": range(n_items)}).to_csv(
-        tmp_path / "item_mapping.csv", index=False
-    )
-    # movies CSV
+
     pd.DataFrame(
         {
-            "movie_idx": range(n_items),
             "movieId": range(n_items),
             "title": [f"Movie {i}" for i in range(n_items)],
             "genres": ["Action|Drama"] * n_items,
         }
-    ).to_csv(tmp_path / "movies.csv", index=False)
+    ).to_parquet(tmp_path / "movies.parquet", index=False)
 
-    # user_seen_items.pkl  (empty — no history)
-    seen: dict[int, set[int]] = {i: set() for i in range(n_users)}
-    with open(tmp_path / "user_seen_items.pkl", "wb") as fh:
-        pickle.dump(seen, fh)
+    # Train log so RecommenderService can build user_seen_items from it.
+    pd.DataFrame(
+        {
+            "user_idx": list(range(n_users)),
+            "movie_idx": list(range(n_users)),
+        }
+    ).to_parquet(tmp_path / "train.parquet", index=False)
 
     return artifact
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> TestClient:
+def client(tmp_path: Path) -> Iterator[TestClient]:
     """Return a TestClient with a pre-loaded fake model."""
     _make_fake_artifact(tmp_path)
 
-    # Patch settings so the app reads from tmp_path
-    with patch("src.config.settings") as mock_settings:
-        mock_settings.model_path = tmp_path / "model.pkl"
-        mock_settings.data_processed_dir = tmp_path
-        mock_settings.model_version = "als_test_v1"
-        mock_settings.top_k = 10
-        mock_settings.implicit_threshold = 3.5
+    from src.config import settings
+    from src.serving import app as app_module
 
-        # Import after patching
-        from src.serving.app import app
-        from src.serving.recommender import RecommenderService
-
-        # Build and load the service directly to bypass lifespan
-        svc = RecommenderService()
-        svc.load(model_path=tmp_path / "model.pkl", data_dir=tmp_path)
-        app.state.recommender = svc  # type: ignore[attr-defined]
-
-        with TestClient(app, raise_server_exceptions=True) as c:
-            yield c
+    with (
+        patch.object(settings, "model_path", tmp_path / "model.pkl"),
+        patch.object(settings, "data_processed_dir", tmp_path),
+        patch.object(settings, "model_version", "als_test_v1"),
+        patch.object(settings, "top_k", 10),
+        patch.object(settings, "implicit_threshold", 3.5),
+        TestClient(app_module.app, raise_server_exceptions=True) as c,
+    ):
+        yield c
 
 
 # ---------------------------------------------------------------------------

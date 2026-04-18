@@ -150,8 +150,8 @@ def evaluate_model(
     # Group test ratings by user.
     user_groups = test_ratings.groupby("user_idx")
 
-    for user_idx, group in user_groups:
-        user_idx = int(user_idx)  # type: ignore[assignment]
+    for raw_user_idx, group in user_groups:
+        uid = int(raw_user_idx)  # type: ignore[arg-type]
 
         # Relevant items: those rated >= threshold in the test set.
         relevant: set[int] = set(
@@ -162,7 +162,7 @@ def evaluate_model(
 
         # Get model recommendations.
         try:
-            recs = model.recommend(user_idx, n=k, exclude_seen=True)
+            recs = model.recommend(uid, n=k, exclude_seen=True)
         except (IndexError, KeyError):
             # User may not exist in the training matrix.
             continue

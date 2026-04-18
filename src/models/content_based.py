@@ -31,6 +31,16 @@ class ContentBasedRecommender(BaseRecommender):
         self._user_profiles: np.ndarray | None = None
         self._user_seen: dict[int, set[int]] = {}
 
+    @property
+    def item_features(self) -> np.ndarray | None:
+        """Dense item-feature matrix (items x features) or None if not fitted."""
+        return self._item_features
+
+    @property
+    def user_profiles(self) -> np.ndarray | None:
+        """Weighted-average user profile matrix (users x features) or None if not fitted."""
+        return self._user_profiles
+
     # ------------------------------------------------------------------
     # fit
     # ------------------------------------------------------------------
