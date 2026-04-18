@@ -37,9 +37,7 @@ class RecsysJsonFormatter(JsonFormatter):
         log_data["env"] = ENVIRONMENT
 
         if record.exc_info:
-            log_data["exception_type"] = (
-                record.exc_info[0].__name__ if record.exc_info[0] else None
-            )
+            log_data["exception_type"] = record.exc_info[0].__name__ if record.exc_info[0] else None
 
         log_data.pop("color_message", None)
         log_data.pop("taskName", None)

@@ -53,9 +53,7 @@ def reload_api(**ctx: dict) -> None:
 
     client = docker.from_env()
     # Find by compose service label — works regardless of project/container name
-    containers = client.containers.list(
-        filters={"label": "com.docker.compose.service=api"}
-    )
+    containers = client.containers.list(filters={"label": "com.docker.compose.service=api"})
     if not containers:
         print("API container not running — skipping reload")
         return
@@ -77,7 +75,6 @@ with DAG(
     catchup=False,
     tags=["recsys", "training"],
 ) as dag:
-
     check_raw = BranchPythonOperator(
         task_id="check_raw_data",
         python_callable=check_raw_data,

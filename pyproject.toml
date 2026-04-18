@@ -46,6 +46,9 @@ src = ["src", "tests"]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+"*.ipynb" = ["E402"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
