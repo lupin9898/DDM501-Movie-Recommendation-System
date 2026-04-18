@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -108,14 +110,19 @@ def extract_csv_from_zip(
     Returns a mapping ``filename -> DataFrame``.
     """
     frames: dict[str, pd.DataFrame] = {}
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+    with (
+        zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf,
+        tempfile.TemporaryDirectory() as tmp_dir,
+    ):
+        tmp_path = Path(tmp_dir)
         for fname in filenames:
             member = f"{dataset_name}/{fname}"
             if member not in zf.namelist():
                 raise IngestionError(f"Expected member '{member}' not found in archive")
             log.info("Extracting %s ...", member)
-            with zf.open(member) as fh:
-                df = pd.read_csv(fh, dtype=DTYPES.get(fname))
+            extracted = tmp_path / fname
+            extracted.write_bytes(zf.read(member))
+            df = pd.read_csv(extracted, dtype=cast(Any, DTYPES.get(fname)))
             _validate_columns(df, fname)
             frames[fname] = df
             log.info("  %s → %d rows, %d columns", fname, len(df), len(df.columns))
