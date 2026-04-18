@@ -24,13 +24,13 @@ class Settings(BaseSettings):
     model_path: Path = Path(__file__).resolve().parent.parent / "artifacts" / "model.pkl"
     model_version: str = "als_v1"
     top_k: int = 10
-    implicit_threshold: float = 3.5
+    implicit_threshold: float = 3.0
 
     # ALS defaults
-    als_factors: int = 100
-    als_regularization: float = 0.05
-    als_iterations: int = 30
-    als_alpha: float = 40.0
+    als_factors: int = 200
+    als_regularization: float = 0.01
+    als_iterations: int = 50
+    als_alpha: float = 100.0
 
     # MLflow
     mlflow_tracking_uri: str = "sqlite:///mlflow.db"

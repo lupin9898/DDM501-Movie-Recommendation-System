@@ -214,6 +214,51 @@ class TestEvaluationMetrics:
 
         assert ndcg_at_k([4, 5, 6], {1, 2, 3}, k=3) == pytest.approx(0.0)
 
+    def test_f1_at_k_happy_path(self) -> None:
+        """F1 is the harmonic mean of precision and recall."""
+        from src.evaluation.metrics import f1_at_k
+
+        assert f1_at_k(0.5, 0.5) == pytest.approx(0.5)
+        assert f1_at_k(1.0, 0.5) == pytest.approx(2 / 3)
+
+    def test_f1_at_k_zero_edge(self) -> None:
+        """F1 = 0 when both precision and recall are 0 (no div-by-zero)."""
+        from src.evaluation.metrics import f1_at_k
+
+        assert f1_at_k(0.0, 0.0) == 0.0
+        assert f1_at_k(0.0, 0.5) == 0.0
+
+    def test_hit_rate_at_k_hit(self) -> None:
+        """Hit rate = 1 when at least one recommendation is relevant."""
+        from src.evaluation.metrics import hit_rate_at_k
+
+        assert hit_rate_at_k([5, 1, 9], {1, 2}, k=3) == 1.0
+
+    def test_hit_rate_at_k_miss(self) -> None:
+        """Hit rate = 0 when no recommendation is relevant."""
+        from src.evaluation.metrics import hit_rate_at_k
+
+        assert hit_rate_at_k([5, 7, 9], {1, 2}, k=3) == 0.0
+
+    def test_reciprocal_rank_first(self) -> None:
+        """MRR = 1.0 when the first item is relevant."""
+        from src.evaluation.metrics import reciprocal_rank
+
+        assert reciprocal_rank([1, 2, 3], {1, 5}) == pytest.approx(1.0)
+
+    def test_reciprocal_rank_later(self) -> None:
+        """MRR = 1/rank of the first relevant item."""
+        from src.evaluation.metrics import reciprocal_rank
+
+        assert reciprocal_rank([9, 1, 3], {1}) == pytest.approx(0.5)
+        assert reciprocal_rank([9, 8, 1], {1}) == pytest.approx(1 / 3)
+
+    def test_reciprocal_rank_no_hit(self) -> None:
+        """MRR = 0 when no relevant item appears in recommendations."""
+        from src.evaluation.metrics import reciprocal_rank
+
+        assert reciprocal_rank([5, 6, 7], {1, 2}) == 0.0
+
     def test_metrics_in_range(self) -> None:
         """All metrics should be in [0, 1]."""
         from src.evaluation.metrics import ndcg_at_k, precision_at_k, recall_at_k

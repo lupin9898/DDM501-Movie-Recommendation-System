@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 from implicit.als import AlternatingLeastSquares
+from implicit.nearest_neighbours import bm25_weight
 from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
@@ -24,11 +25,17 @@ class ALSRecommender(BaseRecommender):
         regularization: float = 0.05,
         iterations: int = 30,
         alpha: float = 40.0,
+        use_bm25: bool = True,
+        bm25_k1: float = 100.0,
+        bm25_b: float = 0.8,
     ) -> None:
         self._factors = factors
         self._regularization = regularization
         self._iterations = iterations
         self._alpha = alpha
+        self._use_bm25 = use_bm25
+        self._bm25_k1 = bm25_k1
+        self._bm25_b = bm25_b
 
         self._model: AlternatingLeastSquares | None = None
         self._interaction: csr_matrix | None = None
@@ -51,8 +58,15 @@ class ALSRecommender(BaseRecommender):
             start, end = int(csr.indptr[uid]), int(csr.indptr[uid + 1])
             self._user_seen[uid] = {int(x) for x in csr.indices[start:end]}
 
+        # BM25 weighting downweights popular items so the model can learn
+        # tail/niche item factors — breaks the popularity collapse.
+        if self._use_bm25:
+            weighted = bm25_weight(interaction_matrix, K1=self._bm25_k1, B=self._bm25_b).tocsr()
+        else:
+            weighted = interaction_matrix.tocsr()
+
         # Confidence-weighted matrix.
-        confidence = (interaction_matrix * self._alpha).astype(np.float32)
+        confidence = (weighted * self._alpha).astype(np.float32)
 
         self._model = AlternatingLeastSquares(
             factors=self._factors,
@@ -63,11 +77,12 @@ class ALSRecommender(BaseRecommender):
         self._model.fit(confidence.tocsr())
 
         log.info(
-            "ALSRecommender fitted: factors=%d, iterations=%d, users=%d, items=%d",
+            "ALSRecommender fitted: factors=%d, iterations=%d, users=%d, items=%d, bm25=%s",
             self._factors,
             self._iterations,
             interaction_matrix.shape[0],
             interaction_matrix.shape[1],
+            self._use_bm25,
         )
 
     def recommend(

@@ -41,6 +41,30 @@ def recall_at_k(recommended: list[int], relevant: set[int], k: int) -> float:
     return hits / len(relevant)
 
 
+def f1_at_k(precision: float, recall: float) -> float:
+    """Harmonic mean of precision and recall. 0 when both are zero."""
+    if precision + recall == 0.0:
+        return 0.0
+    return 2.0 * precision * recall / (precision + recall)
+
+
+def hit_rate_at_k(recommended: list[int], relevant: set[int], k: int) -> float:
+    """1.0 if any recommended item in top-K is relevant, else 0.0 (per-user)."""
+    if k <= 0 or len(relevant) == 0:
+        return 0.0
+    return 1.0 if any(item in relevant for item in recommended[:k]) else 0.0
+
+
+def reciprocal_rank(recommended: list[int], relevant: set[int]) -> float:
+    """1/rank of the first relevant item, or 0 if none found."""
+    if len(relevant) == 0:
+        return 0.0
+    for rank, item in enumerate(recommended, start=1):
+        if item in relevant:
+            return 1.0 / rank
+    return 0.0
+
+
 def ndcg_at_k(recommended: list[int], relevant: set[int], k: int) -> float:
     """Normalized Discounted Cumulative Gain at K."""
     if k <= 0 or len(relevant) == 0:
@@ -145,6 +169,8 @@ def evaluate_model(
     precisions: list[float] = []
     recalls: list[float] = []
     ndcgs: list[float] = []
+    hit_rates: list[float] = []
+    reciprocal_ranks: list[float] = []
     all_recs: list[list[int]] = []
 
     n_items = train_interaction.shape[1]
@@ -174,6 +200,8 @@ def evaluate_model(
         precisions.append(precision_at_k(rec_items, relevant, k))
         recalls.append(recall_at_k(rec_items, relevant, k))
         ndcgs.append(ndcg_at_k(rec_items, relevant, k))
+        hit_rates.append(hit_rate_at_k(rec_items, relevant, k))
+        reciprocal_ranks.append(reciprocal_rank(rec_items, relevant))
         all_recs.append(rec_items)
 
     n_evaluated = len(precisions)
@@ -183,24 +211,36 @@ def evaluate_model(
             "precision_at_k": 0.0,
             "recall_at_k": 0.0,
             "ndcg_at_k": 0.0,
+            "f1_score": 0.0,
+            "hit_rate_at_k": 0.0,
+            "mrr": 0.0,
             "coverage": 0.0,
             "n_users_evaluated": 0.0,
         }
 
+    mean_precision = float(np.mean(precisions))
+    mean_recall = float(np.mean(recalls))
     results: dict[str, float] = {
-        "precision_at_k": float(np.mean(precisions)),
-        "recall_at_k": float(np.mean(recalls)),
+        "precision_at_k": mean_precision,
+        "recall_at_k": mean_recall,
         "ndcg_at_k": float(np.mean(ndcgs)),
+        "f1_score": f1_at_k(mean_precision, mean_recall),
+        "hit_rate_at_k": float(np.mean(hit_rates)),
+        "mrr": float(np.mean(reciprocal_ranks)),
         "coverage": coverage(all_recs, n_items),
         "n_users_evaluated": float(n_evaluated),
     }
 
     log.info(
-        "Evaluation (k=%d): precision=%.4f  recall=%.4f  ndcg=%.4f  coverage=%.4f  users=%d",
+        "Evaluation (k=%d): precision=%.4f  recall=%.4f  ndcg=%.4f  "
+        "f1=%.4f  hit_rate=%.4f  mrr=%.4f  coverage=%.4f  users=%d",
         k,
         results["precision_at_k"],
         results["recall_at_k"],
         results["ndcg_at_k"],
+        results["f1_score"],
+        results["hit_rate_at_k"],
+        results["mrr"],
         results["coverage"],
         n_evaluated,
     )
