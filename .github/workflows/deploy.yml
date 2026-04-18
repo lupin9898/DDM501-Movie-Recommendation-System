@@ -63,8 +63,8 @@ jobs:
           docker tag "$IMAGE" recsys-api:deploy
           echo "API_IMAGE=$IMAGE" >> $GITHUB_ENV
 
-      # ── Deploy với docker-compose.prod.yml ───────────────────────────────
-      - name: Deploy services
+      # ── Start services via docker compose ────────────────────────────────
+      - name: Start services via docker compose
         env:
           API_IMAGE: ${{ env.API_IMAGE }}
           GRAFANA_PASSWORD: ${{ secrets.GRAFANA_PASSWORD }}

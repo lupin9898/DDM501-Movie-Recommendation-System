@@ -56,3 +56,7 @@ class HealthResponse(BaseModel):
     status: str
     model_version: str
     uptime: str
+    model_type: str | None = None
+    trained_at: str | None = None
+    mlflow_run_id: str | None = None
+    git_sha: str | None = None

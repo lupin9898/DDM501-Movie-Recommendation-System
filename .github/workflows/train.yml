@@ -40,30 +40,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Cài dependencies ─────────────────────────────────────────────────
+      # ── Install Python deps ──────────────────────────────────────────────
       - name: Install dependencies
         run: |
-          # Dùng Python 3.11 tường minh, tránh Anaconda 3.13 trên PATH
           PY=$(command -v python3.11 || echo /Library/Frameworks/Python.framework/Versions/3.11/bin/python3.11)
           echo "Using Python: $PY ($($PY --version))"
           $PY -m pip install --upgrade pip
           $PY -m pip install --retries 5 --timeout 120 -r requirements.txt
-          # Đặt python3 alias cho các bước sau
           echo "PYTHON=$PY" >> $GITHUB_ENV
 
-      # ── Đặt đường dẫn persistent trên máy host ──────────────────────────
-      # Dữ liệu và artifacts lưu ngoài workspace để tồn tại giữa các lần chạy
+      # ── Set persistent host paths (shared with docker bind mounts) ───────
+      # Must match RECSYS_DATA_DIR / RECSYS_ARTIFACTS_DIR in the compose .env
+      # so training writes land in the same volume the API reads from.
       - name: Set persistent data paths
         run: |
-          DATA_RAW="$HOME/recsys-data/raw"
-          DATA_PROCESSED="$HOME/recsys-data/processed"
-          ARTIFACTS="$HOME/recsys-artifacts"
-          mkdir -p "$DATA_RAW" "$DATA_PROCESSED" "$ARTIFACTS"
-          echo "RECSYS_DATA_RAW_DIR=$DATA_RAW"         >> $GITHUB_ENV
-          echo "RECSYS_DATA_PROCESSED_DIR=$DATA_PROCESSED" >> $GITHUB_ENV
-          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS"       >> $GITHUB_ENV
+          DATA_DIR="${RECSYS_DATA_DIR_HOST:-$HOME/recsys-data}"
+          ARTIFACTS_DIR="${RECSYS_ARTIFACTS_DIR_HOST:-$HOME/recsys-artifacts}"
+          mkdir -p "$DATA_DIR/raw" "$DATA_DIR/processed" "$ARTIFACTS_DIR"
+          echo "RECSYS_DATA_RAW_DIR=$DATA_DIR/raw"             >> $GITHUB_ENV
+          echo "RECSYS_DATA_PROCESSED_DIR=$DATA_DIR/processed" >> $GITHUB_ENV
+          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS_DIR"           >> $GITHUB_ENV
+          echo "RECSYS_DATA_DIR=$DATA_DIR"                     >> $GITHUB_ENV
+          echo "GIT_SHA=${{ github.sha }}"                     >> $GITHUB_ENV
 
-      # ── Download data ─────────────────────────────────────────────────────
+      # ── Download raw data ────────────────────────────────────────────────
       - name: Download raw data
         run: |
           FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
@@ -90,51 +90,45 @@ jobs:
         run: |
           echo "Training model: $MODEL_TYPE"
           $PYTHON -m src.training.train --model "$MODEL_TYPE"
+          # train.py writes both model.pkl AND model_meta.json into $RECSYS_ARTIFACTS_DIR.
+          test -f "$RECSYS_ARTIFACTS_DIR/model.pkl"      || { echo "model.pkl missing";      exit 1; }
+          test -f "$RECSYS_ARTIFACTS_DIR/model_meta.json" || { echo "model_meta.json missing"; exit 1; }
+          echo "Model artifacts in $RECSYS_ARTIFACTS_DIR:"
+          ls -la "$RECSYS_ARTIFACTS_DIR"
 
-      # ── Ghi metadata ─────────────────────────────────────────────────────
-      - name: Save model metadata
+      # ── Reload API ───────────────────────────────────────────────────────
+      # Bind-mounted volume means the new model is already visible to the API
+      # container; a restart is all that's needed for the service to pick it up.
+      - name: Reload API
         run: |
-          if [ ! -f "$RECSYS_ARTIFACTS_DIR/model.pkl" ]; then
-            echo "ERROR: model.pkl not found after training"
-            exit 1
-          fi
-          echo "{\"model_type\": \"$MODEL_TYPE\", \"sha\": \"${{ github.sha }}\", \"run_id\": \"${{ github.run_id }}\", \"trained_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
-            > "$RECSYS_ARTIFACTS_DIR/model_meta.json"
-          echo "Model saved: $RECSYS_ARTIFACTS_DIR/model.pkl"
-
-      # ── Copy model vào container và restart API ──────────────────────────
-      - name: Deploy model to running API
-        run: |
-          CONTAINER=$(docker compose -f docker-compose.prod.yml ps -q api 2>/dev/null | head -1)
-          if [ -z "$CONTAINER" ]; then
-            echo "API container not running — skipping hot reload."
-            echo "Start the API first with: docker compose -f docker-compose.prod.yml up -d"
+          if ! docker compose -f docker-compose.prod.yml ps api --status running | grep -q api; then
+            echo "API container not running — nothing to reload."
+            echo "Start the stack with: make docker-up"
             exit 0
           fi
-          echo "Copying model into container $CONTAINER..."
-          docker cp "$RECSYS_ARTIFACTS_DIR/model.pkl" "$CONTAINER:/app/artifacts/model.pkl"
-          docker cp "$RECSYS_DATA_PROCESSED_DIR/." "$CONTAINER:/app/data/processed/"
-          echo "Restarting API to load new model..."
-          docker restart "$CONTAINER"
-          for i in $(seq 1 12); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health || echo "000")
-            if [ "$STATUS" = "200" ]; then
-              echo "API healthy after reload (attempt $i)"
+          echo "Restarting API to pick up new model..."
+          docker compose -f docker-compose.prod.yml restart api
+          for i in $(seq 1 24); do
+            VERSION=$(curl -fsS http://localhost:8000/health 2>/dev/null \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('trained_at','?'))" 2>/dev/null || echo "")
+            if [ -n "$VERSION" ] && [ "$VERSION" != "?" ]; then
+              echo "API healthy after reload (attempt $i) — trained_at=$VERSION"
               exit 0
             fi
-            echo "Attempt $i: status=$STATUS — retrying in 5s..."
+            echo "Attempt $i: waiting for API health..."
             sleep 5
           done
-          echo "API did not become healthy — check logs:"
-          docker compose -f docker-compose.prod.yml logs api --tail=30
+          echo "API did not become healthy within 2 minutes. Logs:"
+          docker compose -f docker-compose.prod.yml logs api --tail=50
           exit 1
 
-      # ── Thông báo kết quả ────────────────────────────────────────────────
+      # ── Report ───────────────────────────────────────────────────────────
       - name: Report result
         if: always()
         run: |
           if [ "${{ job.status }}" = "success" ]; then
             echo "Training SUCCESS — model=$MODEL_TYPE sha=${{ github.sha }}"
+            [ -f "$RECSYS_ARTIFACTS_DIR/model_meta.json" ] && cat "$RECSYS_ARTIFACTS_DIR/model_meta.json"
           else
             echo "Training FAILED — check logs above"
           fi

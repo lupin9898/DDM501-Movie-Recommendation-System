@@ -45,9 +45,9 @@ def check_processed_data(**ctx: dict) -> str:
 def reload_api(**ctx: dict) -> None:
     """Restart the API container so it picks up the new model.pkl.
 
-    model.pkl is written to the shared Docker volume (model-data) which is
-    mounted at /opt/airflow/artifacts here and /app/artifacts in the API
-    container — no docker cp needed, only a restart.
+    model.pkl is written to the bind-mounted host dir (${RECSYS_ARTIFACTS_DIR})
+    which is shared between /opt/airflow/artifacts here and /app/artifacts in
+    the API container — no docker cp needed, only a restart.
     """
     import docker  # installed via monitoring/airflow/requirements.txt
 

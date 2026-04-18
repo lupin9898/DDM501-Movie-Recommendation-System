@@ -39,8 +39,8 @@ x-airflow-common: &airflow-common
     - ./monitoring/airflow/dags:/opt/airflow/dags:ro
     - ./src:/opt/airflow/src:ro
     - airflow-logs:/opt/airflow/logs
-    - recsys-data:/opt/airflow/data
-    - model-data:/opt/airflow/artifacts
+    - ${RECSYS_DATA_DIR:-./data}:/opt/airflow/data
+    - ${RECSYS_ARTIFACTS_DIR:-./artifacts}:/opt/airflow/artifacts
     - /var/run/docker.sock:/var/run/docker.sock:ro
   depends_on:
     postgres-init:
@@ -195,8 +195,8 @@ services:
       RECSYS_MLFLOW_TRACKING_URI: http://mlflow:5000
       RECSYS_MLFLOW_EXPERIMENT_NAME: movielens-recommendation
     volumes:
-      - model-data:/app/artifacts
-      - recsys-data:/app/data
+      - ${RECSYS_ARTIFACTS_DIR:-./artifacts}:/app/artifacts
+      - ${RECSYS_DATA_DIR:-./data}:/app/data
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
@@ -225,7 +225,7 @@ services:
       EVIDENTLY_DRIFT_THRESHOLD: "0.1"
     volumes:
       - evidently-data:/app/data
-      - recsys-data:/app/recsys-data:ro
+      - ${RECSYS_DATA_DIR:-./data}:/app/recsys-data:ro
     depends_on:
       api:
         condition: service_healthy
@@ -394,8 +394,6 @@ services:
 volumes:
   postgres-data:
   minio-data:
-  model-data:
-  recsys-data:
   evidently-data:
   prometheus-data:
   grafana-data:

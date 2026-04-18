@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,7 @@ class RecommenderService:
         self._movie_meta: dict[int, dict[str, str | list[str]]] = {}
         self._user_seen: dict[int, set[int]] = {}
         self._popular_items: list[dict[str, int | str | float | list[str]]] = []
+        self._model_meta: dict[str, Any] = {}
         self._recommend_cache: dict[
             tuple[int, int, bool], list[dict[str, int | str | float | list[str]]]
         ] = {}
@@ -57,6 +59,11 @@ class RecommenderService:
     def is_loaded(self) -> bool:
         """Whether model artifacts have been loaded."""
         return self._loaded
+
+    @property
+    def model_meta(self) -> dict[str, Any]:
+        """Training metadata from the last loaded model (trained_at, run_id, …)."""
+        return dict(self._model_meta)
 
     def load(self, model_path: Path, data_dir: Path) -> None:
         """Load model artifacts, movie metadata, user/item mappings, and user seen items.
@@ -168,6 +175,23 @@ class RecommenderService:
         # --- pre-compute popular items -------------------------------------------
         self._popular_items = self._compute_popular_items(top_k=100)
         log.info("Pre-computed top-%d popular items", len(self._popular_items))
+
+        # --- model metadata (trained_at, run_id, metrics) — written by train.py --
+        meta_path = model_path.parent / "model_meta.json"
+        if meta_path.exists():
+            try:
+                self._model_meta = json.loads(meta_path.read_text())
+                log.info(
+                    "Loaded model metadata: trained_at=%s run_id=%s",
+                    self._model_meta.get("trained_at"),
+                    self._model_meta.get("mlflow_run_id"),
+                )
+            except (OSError, json.JSONDecodeError) as exc:
+                log.warning("Failed to parse %s: %s", meta_path, exc)
+                self._model_meta = {}
+        else:
+            log.info("No model_meta.json next to model — metadata will be empty")
+            self._model_meta = {}
 
         self._loaded = True
         log.info("RecommenderService ready")

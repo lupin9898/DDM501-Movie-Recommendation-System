@@ -1,7 +1,10 @@
 """Training pipeline with MLflow experiment tracking."""
 
+import json
 import logging
+import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -191,13 +194,26 @@ def run_training_pipeline(model_type: str = "als") -> None:
         joblib.dump(artifact, model_path)
         mlflow.log_artifact(str(model_path))
 
+        # Write sibling metadata so the API can report which model it serves.
+        meta = {
+            "model_type": model_type,
+            "model_version": settings.model_version,
+            "mlflow_run_id": run.info.run_id,
+            "trained_at": datetime.now(UTC).isoformat(timespec="seconds"),
+            "git_sha": os.environ.get("GITHUB_SHA") or os.environ.get("GIT_SHA"),
+            "metrics": {k: round(float(v), 6) for k, v in metrics.items()},
+        }
+        meta_path = artifacts_dir / "model_meta.json"
+        meta_path.write_text(json.dumps(meta, indent=2, default=str) + "\n")
+        mlflow.log_artifact(str(meta_path))
+
         log.info(
             "Training complete. Run ID: %s, Metrics: %s",
             run.info.run_id,
             metrics,
         )
 
-    log.info("Model saved to %s", model_path)
+    log.info("Model saved to %s (meta: %s)", model_path, meta_path)
 
 
 def main() -> None:
