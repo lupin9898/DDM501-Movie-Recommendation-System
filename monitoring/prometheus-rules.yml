@@ -1,0 +1,84 @@
+groups:
+  - name: system
+    interval: 30s
+    rules:
+      - alert: HighContainerMemory
+        expr: |
+          container_memory_usage_bytes{name!=""}
+            / container_spec_memory_limit_bytes{name!=""} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} memory >80%"
+          description: "Container {{ $labels.name }} has been using more than 80% of its memory limit for 5 minutes."
+
+      - alert: HighContainerCPU
+        expr: |
+          rate(container_cpu_usage_seconds_total{name!=""}[5m]) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} CPU >85%"
+          description: "Container {{ $labels.name }} CPU usage above 85% for 5 minutes."
+
+      - alert: HighHostCPU
+        expr: |
+          100 - (avg(rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host CPU >85%"
+          description: "Host CPU usage above 85% for 5 minutes."
+
+      - alert: HighHostMemory
+        expr: |
+          (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Host memory >85%"
+
+      - alert: DiskSpaceLow
+        expr: |
+          100 - (node_filesystem_avail_bytes{mountpoint="/host"}
+                 / node_filesystem_size_bytes{mountpoint="/host"} * 100) > 85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage >85%"
+
+  - name: recsys
+    interval: 30s
+    rules:
+      - alert: RecsysModelColdStart
+        expr: increase(recsys_cold_start_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Recsys API cold-start spike"
+          description: "API returning fallback recommendations — model may not be loaded."
+
+      - alert: RecsysHighErrorRate
+        expr: |
+          sum(rate(recsys_requests_total{status=~"5.."}[5m]))
+            / sum(rate(recsys_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Recsys API 5xx error rate >5%"
+
+      - alert: EvidentlyDriftDetected
+        expr: evidently_drift_detected == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data drift detected for 10+ minutes"
+          description: "Retrain may be required — check Evidently report."

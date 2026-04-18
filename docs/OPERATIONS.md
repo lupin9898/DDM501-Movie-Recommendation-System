@@ -142,9 +142,35 @@ docker compose -f docker-compose.prod.yml stop \
   elasticsearch kibana filebeat
 ```
 
+## Observability — system + container metrics
+
+Two exporters feed Prometheus with infrastructure metrics:
+
+| Exporter | URL | What it measures |
+|---|---|---|
+| **cAdvisor** | http://localhost:8081 | Per-container CPU, memory, network, disk I/O |
+| **node-exporter** | http://localhost:9100/metrics | Host (Docker Desktop Linux VM) CPU, memory, disk, network |
+
+Grafana has two dashboards:
+
+- **Recommendation System Dashboard** — API request rate, latency, error rate, model version, Evidently drift.
+- **System & Container Metrics** — host CPU/RAM/disk/network + per-container CPU/RAM/network.
+
+**macOS caveat:** node-exporter runs inside the Docker Desktop Linux VM, so its "host" metrics reflect the VM, not macOS itself. For native macOS metrics install via Homebrew: `brew install node_exporter`.
+
+**Alert rules** (`monitoring/prometheus-rules.yml`) fire when:
+- Container memory >80% of limit, CPU >85% (5 min)
+- Host CPU >85%, memory >85% (5 min)
+- Disk >85% (10 min)
+- API cold-start spike, 5xx error rate >5%, drift detected (10 min)
+
+View active alerts at http://localhost:9090/alerts. Wire Alertmanager later to actually notify.
+
 ## Where to look for more
 
 - Application logs: `make docker-logs SERVICE=api` (or check Kibana → `logs-recsys-*`).
-- API request metrics: Grafana → "Recsys API" dashboard.
+- API request metrics: Grafana → "Recommendation System Dashboard".
+- System metrics: Grafana → "System & Container Metrics".
+- Active alerts: http://localhost:9090/alerts.
 - Training runs: MLflow UI at http://localhost:5000.
 - Architecture / why things are wired this way: [ARCHITECTURE.md](ARCHITECTURE.md).
