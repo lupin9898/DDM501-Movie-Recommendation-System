@@ -2,6 +2,7 @@
 
 import logging
 import re
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -49,9 +50,7 @@ def _multi_hot_genres(movies: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
 
     genre_df = pd.DataFrame(0, index=movies.index, columns=genre_list)
     for genre in genre_list:
-        genre_df[genre] = movies["genres"].apply(
-            lambda x, g=genre: int(g in str(x).split("|"))  # type: ignore[misc]
-        )
+        genre_df[genre] = movies["genres"].apply(lambda x, g=genre: int(g in str(x).split("|")))
     return genre_df, genre_list
 
 
@@ -150,9 +149,12 @@ def build_item_features(
     log.info("Building item features for %d unique movies", movies["movie_idx"].nunique())
 
     # --- basic rating aggregation --------------------------------------------
-    agg = ratings.groupby("movie_idx")["rating"].agg(
-        avg_rating="mean",
-        num_ratings="count",
+    agg: pd.DataFrame = cast(
+        pd.DataFrame,
+        ratings.groupby("movie_idx")["rating"].agg(
+            avg_rating="mean",
+            num_ratings="count",
+        ),
     )
 
     # Ensure every movie in *movies* is present, even without ratings.

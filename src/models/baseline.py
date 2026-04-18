@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
 log = logging.getLogger(__name__)
@@ -79,8 +80,8 @@ class PopularityRecommender(BaseRecommender):
 
     def __init__(self) -> None:
         self._interaction: csr_matrix | None = None
-        self._item_popularity: np.ndarray = np.array([])
-        self._popular_ranking: np.ndarray = np.array([])
+        self._item_popularity: NDArray[Any] = np.array([])
+        self._popular_ranking: NDArray[Any] = np.array([])
         self._user_seen: dict[int, set[int]] = {}
 
     def fit(self, interaction_matrix: csr_matrix, **kwargs: Any) -> None:

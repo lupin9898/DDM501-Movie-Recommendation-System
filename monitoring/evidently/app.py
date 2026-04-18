@@ -19,11 +19,11 @@ from evidently.report import Report
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from prometheus_client import Counter, Gauge, generate_latest
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 
 def _configure_logging() -> None:
-    formatter = jsonlogger.JsonFormatter(
+    formatter = JsonFormatter(
         "%(asctime)s %(levelname)s %(name)s %(message)s",
         rename_fields={"levelname": "level", "name": "logger", "asctime": "timestamp"},
     )

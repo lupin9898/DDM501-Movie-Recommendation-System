@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import numpy as np
+from numpy.typing import NDArray
 from scipy.sparse import csr_matrix, issparse
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -27,17 +28,17 @@ class ContentBasedRecommender(BaseRecommender):
 
     def __init__(self) -> None:
         self._interaction: csr_matrix | None = None
-        self._item_features: np.ndarray | None = None
-        self._user_profiles: np.ndarray | None = None
+        self._item_features: NDArray[Any] | None = None
+        self._user_profiles: NDArray[Any] | None = None
         self._user_seen: dict[int, set[int]] = {}
 
     @property
-    def item_features(self) -> np.ndarray | None:
+    def item_features(self) -> NDArray[Any] | None:
         """Dense item-feature matrix (items x features) or None if not fitted."""
         return self._item_features
 
     @property
-    def user_profiles(self) -> np.ndarray | None:
+    def user_profiles(self) -> NDArray[Any] | None:
         """Weighted-average user profile matrix (users x features) or None if not fitted."""
         return self._user_profiles
 
@@ -48,7 +49,7 @@ class ContentBasedRecommender(BaseRecommender):
     def fit(
         self,
         interaction_matrix: csr_matrix,
-        item_features: np.ndarray | csr_matrix | None = None,
+        item_features: NDArray[Any] | csr_matrix | None = None,
         **kwargs: Any,
     ) -> None:
         """Build user profiles from *interaction_matrix* and *item_features*.
@@ -72,22 +73,24 @@ class ContentBasedRecommender(BaseRecommender):
         else:
             self._item_features = np.asarray(item_features)
 
-        # Precompute seen items.
-        self._user_seen = {}
-        for uid in range(interaction_matrix.shape[0]):
-            self._user_seen[uid] = set(interaction_matrix[uid].indices.tolist())
+        csr = interaction_matrix.tocsr()
+        indptr = csr.indptr
+        indices = csr.indices
+        data = csr.data
 
-        # Build user profiles: weighted average of item features.
-        n_users = interaction_matrix.shape[0]
+        # Precompute seen items and user profiles (weighted average of item features).
+        n_users = csr.shape[0]
         n_features = self._item_features.shape[1]
+        self._user_seen = {}
         self._user_profiles = np.zeros((n_users, n_features), dtype=np.float64)
 
         for uid in range(n_users):
-            row = interaction_matrix[uid]
-            item_indices = row.indices
-            if len(item_indices) == 0:
+            start, end = int(indptr[uid]), int(indptr[uid + 1])
+            if end == start:
                 continue
-            weights = np.asarray(row.data, dtype=np.float64)
+            item_indices = indices[start:end]
+            self._user_seen[uid] = {int(x) for x in item_indices}
+            weights = np.asarray(data[start:end], dtype=np.float64)
             feature_vecs = self._item_features[item_indices]  # (k, features)
             weighted_sum = weights @ feature_vecs  # (features,)
             total_weight = weights.sum()
@@ -121,7 +124,9 @@ class ContentBasedRecommender(BaseRecommender):
         if np.allclose(user_profile, 0):
             return []
 
-        scores: np.ndarray = cosine_similarity(user_profile, self._item_features).flatten()
+        scores: NDArray[Any] = cosine_similarity(
+            np.asarray(user_profile), np.asarray(self._item_features)
+        ).flatten()
 
         if exclude_seen:
             seen = self._user_seen.get(user_idx, set())

@@ -1,5 +1,7 @@
 """Tests for recommendation models and evaluation metrics."""
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -119,7 +121,7 @@ class TestContentBasedRecommender:
     """Tests for content-based recommender."""
 
     @pytest.fixture
-    def item_features(self) -> np.ndarray:
+    def item_features(self) -> np.ndarray[Any, Any]:
         """Toy 6-item feature matrix (one-hot genres)."""
         return np.array(
             [
@@ -134,7 +136,7 @@ class TestContentBasedRecommender:
         )
 
     def test_content_based_fits_without_error(
-        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray
+        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray[Any, Any]
     ) -> None:
         """ContentBasedRecommender should fit without raising."""
         from src.models.content_based import ContentBasedRecommender
@@ -143,7 +145,7 @@ class TestContentBasedRecommender:
         model.fit(small_interaction_matrix, item_features=item_features)
 
     def test_content_based_recommendation_length(
-        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray
+        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray[Any, Any]
     ) -> None:
         """ContentBasedRecommender should return exactly n items."""
         from src.models.content_based import ContentBasedRecommender
@@ -154,7 +156,7 @@ class TestContentBasedRecommender:
         assert len(recs) == 3
 
     def test_content_based_no_seen(
-        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray
+        self, small_interaction_matrix: csr_matrix, item_features: np.ndarray[Any, Any]
     ) -> None:
         """ContentBasedRecommender should exclude seen items."""
         from src.models.content_based import ContentBasedRecommender

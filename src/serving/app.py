@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -69,7 +69,7 @@ _start_time: float = time.monotonic()  # overwritten in lifespan, but safe from 
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     """Load model artifacts on startup, clean up on shutdown."""
     global _start_time  # noqa: PLW0603
     _start_time = time.monotonic()
@@ -199,9 +199,9 @@ def _build_recommend_response(
     """Convert raw recommendation dicts into a typed response."""
     recommendations = [
         MovieRecommendation(
-            movie_id=int(r["movie_id"]),
+            movie_id=int(r["movie_id"]),  # type: ignore[arg-type]
             title=str(r["title"]),
-            score=float(r["score"]),
+            score=float(r["score"]),  # type: ignore[arg-type]
             genres=list(r["genres"]),  # type: ignore[arg-type]
         )
         for r in results
@@ -403,9 +403,9 @@ async def similar_movies(
 
         similar = [
             MovieRecommendation(
-                movie_id=int(r["movie_id"]),
+                movie_id=int(r["movie_id"]),  # type: ignore[arg-type]
                 title=str(r["title"]),
-                score=float(r["score"]),
+                score=float(r["score"]),  # type: ignore[arg-type]
                 genres=list(r["genres"]),  # type: ignore[arg-type]
             )
             for r in results

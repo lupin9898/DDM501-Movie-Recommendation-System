@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -79,7 +81,7 @@ def coverage(all_recommendations: list[list[int]], n_items: int) -> float:
     return len(unique_items) / n_items
 
 
-def diversity(recommendations: list[int], item_features: np.ndarray) -> float:
+def diversity(recommendations: list[int], item_features: NDArray[Any]) -> float:
     """Average intra-list distance (1 - cosine_sim) between all item pairs.
 
     Parameters
@@ -98,7 +100,7 @@ def diversity(recommendations: list[int], item_features: np.ndarray) -> float:
         return 0.0
 
     vecs = item_features[recommendations]
-    sim_matrix: np.ndarray = cosine_similarity(vecs)
+    sim_matrix: NDArray[Any] = cosine_similarity(vecs)
 
     # Extract upper-triangle (excluding diagonal) with numpy — O(n) vs O(n²) loop
     upper = sim_matrix[np.triu_indices(len(recommendations), k=1)]

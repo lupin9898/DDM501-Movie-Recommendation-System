@@ -1,10 +1,12 @@
 """Interaction matrix construction for collaborative filtering models."""
 
 import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import scipy.sparse
+from numpy.typing import NDArray
 
 log = logging.getLogger(__name__)
 
@@ -48,9 +50,9 @@ def build_interaction_matrix(
         zero = scipy.sparse.csr_matrix((n_users, n_items), dtype=np.float32)
         return zero, zero
 
-    row = ratings["user_idx"].values.astype(np.int32)
-    col = ratings["movie_idx"].values.astype(np.int32)
-    rating_vals = ratings["rating"].values.astype(np.float32)
+    row: NDArray[Any] = ratings["user_idx"].to_numpy(dtype=np.int32, copy=False)
+    col: NDArray[Any] = ratings["movie_idx"].to_numpy(dtype=np.int32, copy=False)
+    rating_vals: NDArray[Any] = ratings["rating"].to_numpy(dtype=np.float32, copy=False)
 
     # Validate index bounds
     if row.max() >= n_users:
@@ -110,11 +112,13 @@ def get_user_seen_items(
         raise TypeError("interaction_matrix must be a scipy sparse matrix")
 
     csr = interaction_matrix.tocsr()
+    indptr = csr.indptr
+    indices = csr.indices
     seen: dict[int, set[int]] = {}
     for user_idx in range(csr.shape[0]):
-        items = set(csr[user_idx].indices.tolist())
-        if items:
-            seen[user_idx] = items
+        start, end = int(indptr[user_idx]), int(indptr[user_idx + 1])
+        if end > start:
+            seen[user_idx] = {int(x) for x in indices[start:end]}
 
     log.info(
         "Built seen-items dict for %d users (out of %d total)",

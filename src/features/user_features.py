@@ -1,6 +1,7 @@
 """User-level feature engineering from MovieLens ratings and movies data."""
 
 import logging
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -56,9 +57,7 @@ def _extract_genre_columns(movies: pd.DataFrame) -> list[str]:
 
     genre_list = sorted(all_genres)
     for genre in genre_list:
-        movies[genre] = movies["genres"].apply(
-            lambda x, g=genre: int(g in str(x).split("|"))  # type: ignore[misc]
-        )
+        movies[genre] = movies["genres"].apply(lambda x, g=genre: int(g in str(x).split("|")))
     log.info("Created %d binary genre columns from pipe-delimited 'genres' field", len(genre_list))
     return genre_list
 
@@ -113,10 +112,13 @@ def build_user_features(ratings: pd.DataFrame, movies: pd.DataFrame) -> pd.DataF
     log.info("Building user features for %d unique users", ratings["user_idx"].nunique())
 
     # --- basic aggregation ---------------------------------------------------
-    agg = ratings.groupby("user_idx")["rating"].agg(
-        avg_rating="mean",
-        num_ratings="count",
-        rating_std="std",
+    agg: pd.DataFrame = cast(
+        pd.DataFrame,
+        ratings.groupby("user_idx")["rating"].agg(
+            avg_rating="mean",
+            num_ratings="count",
+            rating_std="std",
+        ),
     )
     # Single-rating users get NaN std; fill with 0.
     agg["rating_std"] = agg["rating_std"].fillna(0.0)

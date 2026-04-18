@@ -126,7 +126,7 @@ def filter_cold_start(
 # ---------------------------------------------------------------------------
 
 
-def build_id_mapping(series: pd.Series) -> pd.DataFrame:  # type: ignore[type-arg]
+def build_id_mapping(series: pd.Series) -> pd.DataFrame:
     """Create a contiguous 0-based mapping for unique values in *series*.
 
     Returns a two-column DataFrame: ``original_id`` and ``encoded_id``.

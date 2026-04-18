@@ -30,6 +30,7 @@ dev = [
     "ruff>=0.3.0",
     "mypy>=1.8.0",
     "pandas-stubs>=2.1.0",
+    "types-requests>=2.31.0",
 ]
 
 [build-system]
@@ -66,6 +67,7 @@ asyncio_mode = "auto"
 [tool.coverage.run]
 source = ["src"]
 omit = [
+    "monitoring/evidently/*",
     "tests/*",
     # Pipeline / CLI scripts that run on real data — not unit-testable
     "src/data/ingestion.py",

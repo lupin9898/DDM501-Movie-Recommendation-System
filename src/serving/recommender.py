@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
 import pandas as pd
+from numpy.typing import NDArray
 
 log = logging.getLogger(__name__)
 
@@ -39,8 +41,8 @@ class RecommenderService:
 
     def __init__(self) -> None:
         self._loaded: bool = False
-        self._user_factors: np.ndarray = np.array([])
-        self._item_factors: np.ndarray = np.array([])
+        self._user_factors: NDArray[Any] = np.array([])
+        self._item_factors: NDArray[Any] = np.array([])
         self._user_to_idx: dict[int, int] = {}
         self._item_to_idx: dict[int, int] = {}
         self._idx_to_item: dict[int, int] = {}
@@ -73,7 +75,7 @@ class RecommenderService:
             raise RecommenderServiceError(f"Model file not found: {model_path}")
 
         # Saved by joblib.dump() in train.py
-        model_data: dict[str, np.ndarray] = joblib.load(model_path)
+        model_data: dict[str, NDArray[Any]] = joblib.load(model_path)
 
         self._user_factors = model_data["user_factors"]
         self._item_factors = model_data["item_factors"]
@@ -153,7 +155,9 @@ class RecommenderService:
             train_path = data_dir / "train.parquet"
             if train_path.exists():
                 train_df = pd.read_parquet(train_path, columns=["user_idx", "movie_idx"])
-                grouped = train_df.groupby("user_idx")["movie_idx"].apply(set).to_dict()
+                grouped: dict[Any, set[Any]] = (
+                    train_df.groupby("user_idx")["movie_idx"].apply(set).to_dict()
+                )
                 self._user_seen = {int(k): {int(x) for x in v} for k, v in grouped.items()}
                 log.info("Built user seen items from train.parquet: %d users", len(self._user_seen))
             else:
@@ -258,7 +262,7 @@ class RecommenderService:
 
         # Compute scores via dot product: user_factors[uid] @ item_factors.T
         # .copy() makes the mutation below explicit and safe regardless of numpy internals.
-        scores: np.ndarray = (self._user_factors[user_idx] @ self._item_factors.T).copy()
+        scores: NDArray[Any] = (self._user_factors[user_idx] @ self._item_factors.T).copy()
 
         # Exclude already-seen items by setting their scores to -inf
         if exclude_seen:
@@ -305,7 +309,7 @@ class RecommenderService:
         # Avoid division by zero
         norms = np.where(norms == 0, 1.0, norms)
 
-        similarities: np.ndarray = ((self._item_factors @ target) / (norms * target_norm)).copy()
+        similarities: NDArray[Any] = ((self._item_factors @ target) / (norms * target_norm)).copy()
 
         # Exclude the item itself
         similarities[item_idx] = -np.inf

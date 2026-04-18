@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 from implicit.als import AlternatingLeastSquares
+from numpy.typing import NDArray
 from scipy.sparse import csr_matrix
 
 from src.models.baseline import BaseRecommender
@@ -45,8 +46,10 @@ class ALSRecommender(BaseRecommender):
 
         # Pre-compute seen items per user.
         self._user_seen = {}
-        for uid in range(interaction_matrix.shape[0]):
-            self._user_seen[uid] = set(interaction_matrix[uid].indices.tolist())
+        csr = interaction_matrix.tocsr()
+        for uid in range(csr.shape[0]):
+            start, end = int(csr.indptr[uid]), int(csr.indptr[uid + 1])
+            self._user_seen[uid] = {int(x) for x in csr.indices[start:end]}
 
         # Confidence-weighted matrix.
         confidence = (interaction_matrix * self._alpha).astype(np.float32)
@@ -78,7 +81,7 @@ class ALSRecommender(BaseRecommender):
             raise RuntimeError("Model has not been fitted yet.")
 
         user_vec = self.user_factors[user_idx]
-        scores: np.ndarray = user_vec @ self.item_factors.T
+        scores: NDArray[Any] = user_vec @ self.item_factors.T
 
         if exclude_seen:
             seen = self._user_seen.get(user_idx, set())
@@ -111,14 +114,14 @@ class ALSRecommender(BaseRecommender):
     # -- factor accessors ------------------------------------------------------
 
     @property
-    def user_factors(self) -> np.ndarray:
+    def user_factors(self) -> NDArray[Any]:
         """User latent-factor matrix of shape (n_users, factors)."""
         if self._model is None:
             raise RuntimeError("Model has not been fitted yet.")
         return np.asarray(self._model.user_factors)
 
     @property
-    def item_factors(self) -> np.ndarray:
+    def item_factors(self) -> NDArray[Any]:
         """Item latent-factor matrix of shape (n_items, factors)."""
         if self._model is None:
             raise RuntimeError("Model has not been fitted yet.")

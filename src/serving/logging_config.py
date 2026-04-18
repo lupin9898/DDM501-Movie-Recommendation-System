@@ -11,38 +11,38 @@ import os
 import sys
 from typing import Any
 
-from pythonjsonlogger import jsonlogger
+from pythonjsonlogger.json import JsonFormatter
 
 SERVICE_NAME = os.getenv("RECSYS_SERVICE_NAME", "recsys-api")
 SERVICE_VERSION = os.getenv("RECSYS_MODEL_VERSION", "unknown")
 ENVIRONMENT = os.getenv("RECSYS_ENV", "production")
 
 
-class RecsysJsonFormatter(jsonlogger.JsonFormatter):
+class RecsysJsonFormatter(JsonFormatter):
     """JSON formatter that injects fixed service metadata on every record."""
 
     def add_fields(
         self,
-        log_record: dict[str, Any],
+        log_data: dict[str, Any],
         record: logging.LogRecord,
         message_dict: dict[str, Any],
     ) -> None:
-        super().add_fields(log_record, record, message_dict)
+        super().add_fields(log_data, record, message_dict)
 
-        log_record.setdefault("timestamp", self.formatTime(record, self.datefmt))
-        log_record["level"] = record.levelname
-        log_record["logger"] = record.name
-        log_record["service"] = SERVICE_NAME
-        log_record["service_version"] = SERVICE_VERSION
-        log_record["env"] = ENVIRONMENT
+        log_data.setdefault("timestamp", self.formatTime(record, self.datefmt))
+        log_data["level"] = record.levelname
+        log_data["logger"] = record.name
+        log_data["service"] = SERVICE_NAME
+        log_data["service_version"] = SERVICE_VERSION
+        log_data["env"] = ENVIRONMENT
 
         if record.exc_info:
-            log_record["exception_type"] = (
+            log_data["exception_type"] = (
                 record.exc_info[0].__name__ if record.exc_info[0] else None
             )
 
-        log_record.pop("color_message", None)
-        log_record.pop("taskName", None)
+        log_data.pop("color_message", None)
+        log_data.pop("taskName", None)
 
 
 def configure_logging(level: str = "INFO") -> None:
