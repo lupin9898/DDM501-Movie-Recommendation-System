@@ -29,7 +29,7 @@ _NO_GENRE_TOKENS = {"(no genres listed)", ""}
 
 @dataclass
 class LightFMBundle:
-    """Gói tất cả artefact cần cho huấn luyện và inference LightFM."""
+    """Gói tất cả artefact cần cho huấn luyện và inference LightFM ."""
 
     dataset: Dataset
     train_interactions: csr_matrix
