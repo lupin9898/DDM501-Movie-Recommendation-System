@@ -56,7 +56,7 @@ groups:
     interval: 30s
     rules:
       - alert: RecsysModelColdStart
-        expr: increase(recsys_cold_start_total[5m]) > 10
+        expr: increase(cold_start_fallback_total[5m]) > 10
         for: 2m
         labels:
           severity: critical
@@ -66,13 +66,13 @@ groups:
 
       - alert: RecsysHighErrorRate
         expr: |
-          sum(rate(recsys_requests_total{status=~"5.."}[5m]))
-            / sum(rate(recsys_requests_total[5m])) > 0.05
+          sum(rate(recommendation_requests_total{status="error"}[5m]))
+            / sum(rate(recommendation_requests_total[5m])) > 0.05
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "Recsys API 5xx error rate >5%"
+          summary: "Recsys API error rate >5%"
 
       - alert: EvidentlyDriftDetected
         expr: evidently_drift_detected == 1
