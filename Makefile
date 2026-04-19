@@ -15,8 +15,7 @@ gen-secrets:  ## Generate .env with random passwords (fails if .env exists)
 	./scripts/gen-secrets.sh
 
 # ── Data & training ──────────────────────────────────────────────────────────
-data:  ## Download + preprocess MovieLens data
-	python -m src.data.ingestion
+data:  ## Preprocess raw MovieLens data (ratings.csv + movies.csv must exist in data/raw/)
 	python -m src.data.preprocessing
 
 train:  ## Train LightFM hybrid model (logs to MLflow)

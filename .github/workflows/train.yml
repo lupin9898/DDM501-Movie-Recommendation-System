@@ -13,7 +13,7 @@ on:
           - popular
           - random
       force_preprocess:
-        description: "Force re-download data and reprocess (bỏ qua cache)"
+        description: "Force reprocess data (bỏ qua cache)"
         required: false
         default: "false"
         type: choice
@@ -61,17 +61,6 @@ jobs:
           echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS_DIR"           >> $GITHUB_ENV
           echo "RECSYS_DATA_DIR=$DATA_DIR"                     >> $GITHUB_ENV
           echo "GIT_SHA=${{ github.sha }}"                     >> $GITHUB_ENV
-
-      # ── Download raw data ────────────────────────────────────────────────
-      - name: Download raw data
-        run: |
-          FORCE="${{ github.event.inputs.force_preprocess || 'false' }}"
-          if [ "$FORCE" = "true" ] || [ ! -f "$RECSYS_DATA_RAW_DIR/ratings.csv" ]; then
-            echo "Downloading MovieLens dataset..."
-            $PYTHON -m src.data.ingestion
-          else
-            echo "Raw data found — skipping download. (force_preprocess=false)"
-          fi
 
       # ── Preprocess ───────────────────────────────────────────────────────
       - name: Preprocess data

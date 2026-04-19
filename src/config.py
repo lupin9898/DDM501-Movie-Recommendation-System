@@ -15,8 +15,6 @@ class Settings(BaseSettings):
     artifacts_dir: Path = Path(__file__).resolve().parent.parent / "artifacts"
 
     # Dataset
-    dataset_url: str = "https://files.grouplens.org/datasets/movielens/ml-25m.zip"
-    dataset_name: str = "ml-25m"
     min_user_ratings: int = 20
     min_item_ratings: int = 10
 

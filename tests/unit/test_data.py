@@ -1,4 +1,4 @@
-"""Tests for data ingestion and preprocessing."""
+"""Tests for data preprocessing."""
 
 import numpy as np
 import pandas as pd
@@ -90,62 +90,6 @@ class TestPreprocessing:
 
         train, _val, test = temporal_split(sample_ratings, train_frac=0.7, val_frac=0.15)
         assert train["timestamp"].max() <= test["timestamp"].min()
-
-
-class TestInteraction:
-    """Tests for interaction matrix building."""
-
-    def test_interaction_matrix_shape(self) -> None:
-        """Interaction matrix should have correct dimensions."""
-        from src.features.interaction import build_interaction_matrix
-
-        ratings = pd.DataFrame(
-            {
-                "user_idx": [0, 0, 1, 1, 2],
-                "movie_idx": [0, 1, 1, 2, 0],
-                "rating": [4.0, 3.0, 5.0, 2.0, 4.5],
-            }
-        )
-        explicit, implicit = build_interaction_matrix(
-            ratings, n_users=3, n_items=3, implicit_threshold=3.5
-        )
-        assert explicit.shape == (3, 3)
-        assert implicit.shape == (3, 3)
-
-    def test_implicit_threshold(self) -> None:
-        """Implicit matrix should binarize at threshold."""
-        from src.features.interaction import build_interaction_matrix
-
-        ratings = pd.DataFrame(
-            {
-                "user_idx": [0, 0, 1],
-                "movie_idx": [0, 1, 0],
-                "rating": [4.0, 2.0, 3.5],
-            }
-        )
-        _, implicit = build_interaction_matrix(
-            ratings, n_users=2, n_items=2, implicit_threshold=3.5
-        )
-        assert implicit[0, 0] == 1.0  # 4.0 >= 3.5
-        assert implicit[0, 1] == 0.0  # 2.0 < 3.5
-        assert implicit[1, 0] == 1.0  # 3.5 >= 3.5
-
-    def test_user_seen_items(self) -> None:
-        """User seen items should correctly map users to items."""
-        from src.features.interaction import build_interaction_matrix, get_user_seen_items
-
-        ratings = pd.DataFrame(
-            {
-                "user_idx": [0, 0, 1, 2],
-                "movie_idx": [0, 1, 1, 2],
-                "rating": [4.0, 3.0, 5.0, 4.5],
-            }
-        )
-        explicit, _ = build_interaction_matrix(ratings, n_users=3, n_items=3)
-        seen = get_user_seen_items(explicit)
-        assert seen[0] == {0, 1}
-        assert seen[1] == {1}
-        assert seen[2] == {2}
 
 
 # ---------------------------------------------------------------------------

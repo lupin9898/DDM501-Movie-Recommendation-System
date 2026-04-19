@@ -218,7 +218,7 @@ def run_training_pipeline(model_type: str = "lightfm") -> None:
 
     with mlflow.start_run(run_name=f"{model_type}_run") as run:
         mlflow.set_tag("model_type", model_type)
-        mlflow.set_tag("dataset_version", settings.dataset_name)
+        mlflow.set_tag("dataset_version", "ml-latest-small")
         mlflow.set_tag("split_strategy", "random_80_20")
 
         mlflow.log_params(hyperparams if hyperparams else {"model_type": model_type})

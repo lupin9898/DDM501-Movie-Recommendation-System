@@ -10,7 +10,6 @@ from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import BranchPythonOperator, PythonOperator
 
-DATA_RAW = Path(os.getenv("RECSYS_DATA_RAW_DIR", "/opt/airflow/data/raw"))
 DATA_PROCESSED = Path(os.getenv("RECSYS_DATA_PROCESSED_DIR", "/opt/airflow/data/processed"))
 ARTIFACTS = Path(os.getenv("RECSYS_ARTIFACTS_DIR", "/opt/airflow/artifacts"))
 
@@ -22,14 +21,7 @@ default_args = {
 }
 
 
-# ── Branch helpers ──────────────────────────────────────────────────────────
-
-
-def check_raw_data(**ctx: dict) -> str:
-    """Branch: download data if missing, else skip to processed check."""
-    if not (DATA_RAW / "ratings.csv").exists():
-        return "download_data"
-    return "check_processed_data"
+# ── Branch helper ───────────────────────────────────────────────────────────
 
 
 def check_processed_data(**ctx: dict) -> str:
@@ -75,20 +67,9 @@ with DAG(
     catchup=False,
     tags=["recsys", "training"],
 ) as dag:
-    check_raw = BranchPythonOperator(
-        task_id="check_raw_data",
-        python_callable=check_raw_data,
-    )
-
-    download_data = BashOperator(
-        task_id="download_data",
-        bash_command="cd /opt/airflow && python -m src.data.ingestion",
-    )
-
     check_processed = BranchPythonOperator(
         task_id="check_processed_data",
         python_callable=check_processed_data,
-        trigger_rule="none_failed_min_one_success",
     )
 
     preprocess_data = BashOperator(
@@ -107,8 +88,6 @@ with DAG(
         python_callable=reload_api,
     )
 
-    check_raw >> download_data >> check_processed
-    check_raw >> check_processed
     check_processed >> preprocess_data >> train_model
     check_processed >> train_model
     train_model >> reload_api_task
