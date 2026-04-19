@@ -48,20 +48,17 @@ jobs:
           $PY -m pip install --retries 5 --timeout 120 -r requirements.txt
 
           # On macOS the pip wheel for LightFM has no OpenMP → single thread → 4-8x slower.
-          # Rebuild from source with libomp. --no-build-isolation avoids the
-          # Cython3/setuptools AttributeError: 'dict' has no attribute '__LIGHTFM_SETUP__'.
+          # Use git master (fixed setup.py) + --no-build-isolation so the Cython3
+          # __LIGHTFM_SETUP__ AttributeError is bypassed and OpenMP flags are respected.
           if [[ "$OSTYPE" == "darwin"* ]]; then
             brew list libomp &>/dev/null || brew install libomp
             LIBOMP="$(brew --prefix libomp)"
-            LIGHTFM_VER=$($PY -m pip show lightfm | awk '/^Version:/{print $2}')
-            # Pin Cython<3 — LightFM 1.17 setup.py uses Cython2 API (__LIGHTFM_SETUP__)
-            # that Cython3 removed. --no-build-isolation uses this env Cython, not Cython3.
-            $PY -m pip install --upgrade setuptools wheel "Cython<3"
+            $PY -m pip install --upgrade pip setuptools wheel
             CC="$(xcrun -find clang)" \
               CFLAGS="-Xpreprocessor -fopenmp -I${LIBOMP}/include" \
               LDFLAGS="-L${LIBOMP}/lib" \
-              $PY -m pip install --no-build-isolation --no-binary :all: \
-                --force-reinstall "lightfm==${LIGHTFM_VER}"
+              $PY -m pip install --no-build-isolation \
+                "git+https://github.com/lyst/lightfm.git@master"
           fi
           echo "PYTHON=$PY" >> $GITHUB_ENV
 
