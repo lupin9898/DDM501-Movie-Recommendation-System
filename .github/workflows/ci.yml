@@ -41,10 +41,14 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-test.txt
+      - name: Install build tools
+        run: pip install --upgrade pip wheel setuptools
+
+      - name: Install lightfm (needs --no-build-isolation on hosted runner)
+        run: pip install --no-build-isolation "git+https://github.com/lyst/lightfm.git@master"
+
+      - name: Install remaining dependencies
+        run: pip install -r requirements.txt -r requirements-test.txt
 
       - name: Run tests with coverage
         run: pytest tests/ -v --cov=src --cov-report=xml --cov-fail-under=80
