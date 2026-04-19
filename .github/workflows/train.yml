@@ -46,21 +46,31 @@ jobs:
           echo "Using Python: $PY ($($PY --version))"
           $PY -m pip install --upgrade pip
           $PY -m pip install --retries 5 --timeout 120 -r requirements.txt
+
+          # On macOS the pip wheel for LightFM has no OpenMP → single thread → 4-8x slower.
+          # Rebuild from source with libomp so all threads are used.
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            brew list libomp &>/dev/null || brew install libomp
+            LIBOMP="$(brew --prefix libomp)"
+            LIGHTFM_VER=$($PY -m pip show lightfm | awk '/^Version:/{print $2}')
+            CC="$(xcrun -find clang)" \
+              CFLAGS="-Xpreprocessor -fopenmp -I${LIBOMP}/include" \
+              LDFLAGS="-L${LIBOMP}/lib" \
+              $PY -m pip install --no-binary :all: --force-reinstall "lightfm==${LIGHTFM_VER}"
+          fi
           echo "PYTHON=$PY" >> $GITHUB_ENV
 
       # ── Set persistent host paths (shared with docker bind mounts) ───────
-      # Must match RECSYS_DATA_DIR / RECSYS_ARTIFACTS_DIR in the compose .env
-      # so training writes land in the same volume the API reads from.
+      # Raw data comes from the repo's data/raw/ (ml-latest-small, ~100K ratings).
+      # Artifacts go to a persistent host dir that the API container bind-mounts.
       - name: Set persistent data paths
         run: |
-          DATA_DIR="${RECSYS_DATA_DIR_HOST:-$HOME/recsys-data}"
           ARTIFACTS_DIR="${RECSYS_ARTIFACTS_DIR_HOST:-$HOME/recsys-artifacts}"
-          mkdir -p "$DATA_DIR/raw" "$DATA_DIR/processed" "$ARTIFACTS_DIR"
-          echo "RECSYS_DATA_RAW_DIR=$DATA_DIR/raw"             >> $GITHUB_ENV
-          echo "RECSYS_DATA_PROCESSED_DIR=$DATA_DIR/processed" >> $GITHUB_ENV
-          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS_DIR"           >> $GITHUB_ENV
-          echo "RECSYS_DATA_DIR=$DATA_DIR"                     >> $GITHUB_ENV
-          echo "GIT_SHA=${{ github.sha }}"                     >> $GITHUB_ENV
+          mkdir -p "$GITHUB_WORKSPACE/data/processed" "$ARTIFACTS_DIR"
+          echo "RECSYS_DATA_RAW_DIR=$GITHUB_WORKSPACE/data/raw"             >> $GITHUB_ENV
+          echo "RECSYS_DATA_PROCESSED_DIR=$GITHUB_WORKSPACE/data/processed" >> $GITHUB_ENV
+          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS_DIR"                        >> $GITHUB_ENV
+          echo "GIT_SHA=${{ github.sha }}"                                  >> $GITHUB_ENV
 
       # ── Preprocess ───────────────────────────────────────────────────────
       - name: Preprocess data

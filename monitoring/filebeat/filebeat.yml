@@ -31,6 +31,24 @@ processors:
       add_error_key: true
       max_depth: 3
 
+  # Remove null timestamp decoded from API JSON — avoids ES date mapping 400 errors.
+  - drop_fields:
+      fields: ["timestamp"]
+      ignore_missing: true
+
+  # Rename ECS-reserved string fields to avoid object mapping conflicts.
+  # `event` and `service` are ECS object types; our API emits them as strings.
+  - rename:
+      fields:
+        - from: "event"
+          to: "log_event"
+        - from: "service"
+          to: "service_name"
+        - from: "user_agent"
+          to: "http_user_agent"
+      ignore_missing: true
+      fail_on_error: false
+
   # Drop internal filebeat heartbeat noise
   - drop_event:
       when:

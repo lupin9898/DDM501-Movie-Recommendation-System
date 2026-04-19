@@ -79,6 +79,8 @@ async def recommend(http_request: Request, request: RecommendRequest) -> Recomme
                 "exclude_seen": request.exclude_seen,
                 "cold_start": is_cold_start,
                 "result_count": len(results),
+                "movie_ids": [int(r["movie_id"]) for r in results],
+                "top_title": str(results[0]["title"]) if results else None,
                 "latency_ms": round(latency_ms, 3),
                 "model_version": settings.model_version,
                 "status": "success",

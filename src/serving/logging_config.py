@@ -29,7 +29,7 @@ class RecsysJsonFormatter(JsonFormatter):
     ) -> None:
         super().add_fields(log_data, record, message_dict)
 
-        log_data.setdefault("timestamp", self.formatTime(record, self.datefmt))
+        log_data["timestamp"] = self.formatTime(record, self.datefmt)
         log_data["level"] = record.levelname
         log_data["logger"] = record.name
         log_data["service"] = SERVICE_NAME
