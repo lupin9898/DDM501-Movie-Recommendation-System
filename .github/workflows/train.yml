@@ -6,11 +6,10 @@ on:
       model_type:
         description: "Model type to train"
         required: false
-        default: "als"
+        default: "lightfm"
         type: choice
         options:
-          - als
-          - content_based
+          - lightfm
           - popular
           - random
       force_preprocess:
@@ -28,11 +27,11 @@ on:
 
 jobs:
   train:
-    name: Train Model (${{ github.event.inputs.model_type || 'als' }})
+    name: Train Model (${{ github.event.inputs.model_type || 'lightfm' }})
     runs-on: self-hosted
 
     env:
-      MODEL_TYPE: ${{ github.event.inputs.model_type || 'als' }}
+      MODEL_TYPE: ${{ github.event.inputs.model_type || 'lightfm' }}
       RECSYS_MLFLOW_TRACKING_URI: "http://localhost:5000"
       RECSYS_MLFLOW_EXPERIMENT_NAME: "movielens-recommendation"
       # --serve-artifacts on MLflow server proxies artifact uploads → runner không cần S3 credentials

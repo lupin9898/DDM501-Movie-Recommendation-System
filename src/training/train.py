@@ -1,200 +1,245 @@
-"""Training pipeline with MLflow experiment tracking."""
+"""Pipeline huấn luyện LightFM Hybrid với MLflow experiment tracking.
 
+Quy trình:
+1. Đọc ``ratings.csv`` + ``movies.csv`` từ ``data/raw/``.
+2. Build ``LightFMBundle`` (split 80/20 random, interactions, item features).
+3. Train ``LightFMRecommender`` (WARP, 64 components, lr=0.05, 30 epochs).
+4. Đánh giá bằng ``lightfm.evaluation`` (precision@k, recall@k, auc_score).
+5. Log mọi tham số / metric vào MLflow; lưu artifact ``model.pkl`` +
+   ``model_meta.json`` cho serving.
+"""
+
+from __future__ import annotations
+
+import argparse
 import json
 import logging
 import os
 import time
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 import joblib
 import mlflow
 import numpy as np
-import pandas as pd
+from lightfm.evaluation import auc_score, precision_at_k, recall_at_k
 
 from src.config import settings
-from src.evaluation.metrics import coverage, evaluate_model
-from src.features.interaction import build_interaction_matrix
+from src.features.lightfm_dataset import LightFMBundle, build_lightfm_dataset
 from src.models.baseline import PopularityRecommender, RandomRecommender
-from src.models.collaborative import ALSRecommender
-from src.models.content_based import ContentBasedRecommender
+from src.models.lightfm_hybrid import LightFMRecommender
 
 log = logging.getLogger(__name__)
 
 
-def load_processed_data(data_dir: Path) -> dict[str, pd.DataFrame]:
-    """Load preprocessed parquet files."""
-    data: dict[str, pd.DataFrame] = {
-        "train": pd.read_parquet(data_dir / "train.parquet"),
-        "val": pd.read_parquet(data_dir / "val.parquet"),
-        "test": pd.read_parquet(data_dir / "test.parquet"),
-        "movies": pd.read_parquet(data_dir / "movies.parquet"),
-        "user_id_map": pd.read_parquet(data_dir / "user_id_map.parquet"),
-        "movie_id_map": pd.read_parquet(data_dir / "movie_id_map.parquet"),
-    }
-    log.info(
-        "Loaded data: train=%d, val=%d, test=%d, movies=%d",
-        len(data["train"]),
-        len(data["val"]),
-        len(data["test"]),
-        len(data["movies"]),
+def _evaluate_lightfm(
+    model: LightFMRecommender,
+    bundle: LightFMBundle,
+    k: int,
+) -> dict[str, float]:
+    """Đánh giá LightFM trên test split bằng API chuẩn của thư viện."""
+    lightfm_model = model.model
+    item_features = bundle.item_features
+    num_threads = settings.lightfm_num_threads
+
+    # ``train_interactions`` được truyền để loại các cặp train ra khỏi test
+    # evaluation — đây là cách chuẩn để tránh data leakage.
+    precision = float(
+        precision_at_k(
+            lightfm_model,
+            test_interactions=bundle.test_interactions,
+            train_interactions=bundle.train_interactions,
+            k=k,
+            item_features=item_features,
+            num_threads=num_threads,
+        ).mean()
     )
-    return data
+    recall = float(
+        recall_at_k(
+            lightfm_model,
+            test_interactions=bundle.test_interactions,
+            train_interactions=bundle.train_interactions,
+            k=k,
+            item_features=item_features,
+            num_threads=num_threads,
+        ).mean()
+    )
+    auc = float(
+        auc_score(
+            lightfm_model,
+            test_interactions=bundle.test_interactions,
+            train_interactions=bundle.train_interactions,
+            item_features=item_features,
+            num_threads=num_threads,
+        ).mean()
+    )
+
+    # In kết quả rõ ràng như người dùng yêu cầu.
+    print("=" * 60)
+    print(f"KẾT QUẢ ĐÁNH GIÁ LIGHTFM HYBRID (k={k})")
+    print("=" * 60)
+    print(f"  Precision@{k}: {precision:.4f}")
+    print(f"  Recall@{k}   : {recall:.4f}")
+    print(f"  AUC score    : {auc:.4f}")
+    print("=" * 60)
+
+    return {
+        "precision_at_k": precision,
+        "recall_at_k": recall,
+        "auc": auc,
+        # F1 tiện log cho Prometheus/MLflow.
+        "f1_score": (
+            0.0 if (precision + recall) == 0 else 2 * precision * recall / (precision + recall)
+        ),
+        "n_users_evaluated": float(bundle.test_interactions.shape[0]),
+    }
+
+
+def _build_user_seen(train_interactions: Any) -> dict[int, set[int]]:
+    """Lấy dict user_idx -> set(item_idx) đã xem từ matrix train."""
+    csr = train_interactions.tocsr()
+    seen: dict[int, set[int]] = {}
+    for uid in range(csr.shape[0]):
+        start, end = int(csr.indptr[uid]), int(csr.indptr[uid + 1])
+        seen[uid] = {int(x) for x in csr.indices[start:end]}
+    return seen
 
 
 def train_and_evaluate(
-    model_type: str = "als",
-    hyperparams: dict[str, Any] | None = None,
-) -> tuple[Any, dict[str, float]]:
-    """Train a model, evaluate it, and return (model, metrics)."""
-    if hyperparams is None:
-        hyperparams = {}
+    model_type: str = "lightfm",
+) -> tuple[Any, dict[str, float], LightFMBundle | None]:
+    """Train + evaluate; trả về (model, metrics, bundle).
 
-    data_dir = settings.data_processed_dir
-    data = load_processed_data(data_dir)
+    Bundle chỉ có giá trị với ``lightfm``; baselines trả về None.
+    """
+    if model_type == "lightfm":
+        bundle = build_lightfm_dataset(
+            ratings_csv=settings.data_raw_dir / "ratings.csv",
+            movies_csv=settings.data_raw_dir / "movies.csv",
+            test_size=settings.lightfm_test_size,
+            seed=settings.lightfm_split_seed,
+        )
 
-    train_df = data["train"]
-    val_df = data["val"]
-    movies_df = data["movies"]
+        model = LightFMRecommender(
+            no_components=settings.lightfm_no_components,
+            loss=settings.lightfm_loss,
+            learning_rate=settings.lightfm_learning_rate,
+            epochs=settings.lightfm_epochs,
+            num_threads=settings.lightfm_num_threads,
+            random_state=settings.lightfm_split_seed,
+        )
+        model.fit(bundle.train_interactions, item_features=bundle.item_features)
 
-    # Use global ID maps so n_users/n_items covers the full encoded space,
-    # not just users/items present in the train split.
-    n_users = len(data["user_id_map"])
-    n_items = len(data["movie_id_map"])
+        metrics = _evaluate_lightfm(model, bundle, k=settings.top_k)
+        return model, metrics, bundle
 
-    log.info("Building interaction matrix: %d users, %d items", n_users, n_items)
-    explicit_matrix, implicit_matrix = build_interaction_matrix(
-        train_df, n_users, n_items, implicit_threshold=settings.implicit_threshold
+    # --- Baselines (smoke-test cho CI, không cần item features) --------------
+    # Dùng lại bundle để có cùng matrix interactions — tránh chệch so sánh.
+    bundle = build_lightfm_dataset(
+        ratings_csv=settings.data_raw_dir / "ratings.csv",
+        movies_csv=settings.data_raw_dir / "movies.csv",
+        test_size=settings.lightfm_test_size,
+        seed=settings.lightfm_split_seed,
     )
+    interactions = bundle.train_interactions
 
-    # Select model
     if model_type == "random":
-        model: Any = RandomRecommender()
-        model.fit(implicit_matrix)
+        baseline: Any = RandomRecommender()
     elif model_type == "popular":
-        model = PopularityRecommender()
-        model.fit(implicit_matrix)
-    elif model_type == "als":
-        params = {
-            "factors": hyperparams.get("factors", settings.als_factors),
-            "regularization": hyperparams.get("regularization", settings.als_regularization),
-            "iterations": hyperparams.get("iterations", settings.als_iterations),
-            "alpha": hyperparams.get("alpha", settings.als_alpha),
-        }
-        model = ALSRecommender(**params)
-        model.fit(implicit_matrix)
-    elif model_type == "content_based":
-        from src.features.item_features import build_item_features
-
-        item_feat_df = build_item_features(train_df, movies_df)
-        genre_cols = [
-            c
-            for c in item_feat_df.columns
-            if c not in ("avg_rating", "num_ratings", "popularity_score", "year")
-            and not c.startswith("tag_tfidf_")
-        ]
-        item_features_array = item_feat_df[genre_cols].values.astype(np.float32)
-        model = ContentBasedRecommender()
-        model.fit(explicit_matrix, item_features=item_features_array)
+        baseline = PopularityRecommender()
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+    baseline.fit(interactions)
 
-    # Evaluate on validation set
-    log.info("Evaluating model on validation set...")
-    k = settings.top_k
-    metrics = evaluate_model(
-        model=model,
-        test_ratings=val_df,
-        train_interaction=implicit_matrix,
-        k=k,
-        threshold=settings.implicit_threshold,
-    )
-
-    # Compute coverage
-    all_recs: list[list[int]] = []
-    sample_users = val_df["user_idx"].unique()[:500]
-    for uid in sample_users:
-        if uid < implicit_matrix.shape[0]:
-            recs = model.recommend(int(uid), n=k, exclude_seen=True)
-            all_recs.append([item_id for item_id, _ in recs])
-    metrics["coverage"] = coverage(all_recs, n_items)
-
-    log.info("Validation metrics: %s", metrics)
-    return model, metrics
+    # Baselines chỉ cần AUC-less rough metric — placeholder để MLflow vẫn log.
+    metrics = {
+        "precision_at_k": 0.0,
+        "recall_at_k": 0.0,
+        "auc": 0.0,
+        "f1_score": 0.0,
+        "n_users_evaluated": float(interactions.shape[0]),
+    }
+    return baseline, metrics, bundle
 
 
-def run_training_pipeline(model_type: str = "als") -> None:
-    """Full training pipeline with MLflow logging."""
+def _build_artifact(
+    model_type: str,
+    model: Any,
+    bundle: LightFMBundle | None,
+    metrics: dict[str, float],
+    hyperparams: dict[str, Any],
+) -> dict[str, Any]:
+    """Dựng dict artifact để joblib dump cho serving load."""
+    if model_type == "lightfm" and bundle is not None:
+        return {
+            "model_type": "lightfm",
+            "model": model.model,  # lightfm.LightFM object
+            "item_features": bundle.item_features,
+            "item_embeddings": np.asarray(model.item_embeddings),
+            "user_id_map": bundle.user_id_map,
+            "item_id_map": bundle.item_id_map,
+            "reverse_item_id_map": bundle.reverse_item_id_map,
+            "reverse_user_id_map": bundle.reverse_user_id_map,
+            "user_seen": _build_user_seen(bundle.train_interactions),
+            "movies": bundle.movies,
+            "n_users": bundle.train_interactions.shape[0],
+            "n_items": bundle.train_interactions.shape[1],
+            "hyperparams": hyperparams,
+            "metrics": metrics,
+            "model_version": settings.model_version,
+            "num_threads": settings.lightfm_num_threads,
+        }
+
+    # Baselines: serving không bắt buộc chạy baseline; lưu metadata tối thiểu.
+    return {
+        "model_type": model_type,
+        "metrics": metrics,
+        "hyperparams": hyperparams,
+        "model_version": settings.model_version,
+    }
+
+
+def run_training_pipeline(model_type: str = "lightfm") -> None:
+    """Chạy full pipeline: train → evaluate → log MLflow → dump artifact."""
     mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
     mlflow.set_experiment(settings.mlflow_experiment_name)
 
     hyperparams: dict[str, Any] = {}
-    if model_type == "als":
+    if model_type == "lightfm":
         hyperparams = {
-            "factors": settings.als_factors,
-            "regularization": settings.als_regularization,
-            "iterations": settings.als_iterations,
-            "alpha": settings.als_alpha,
+            "no_components": settings.lightfm_no_components,
+            "loss": settings.lightfm_loss,
+            "learning_rate": settings.lightfm_learning_rate,
+            "epochs": settings.lightfm_epochs,
+            "num_threads": settings.lightfm_num_threads,
+            "test_size": settings.lightfm_test_size,
+            "split_seed": settings.lightfm_split_seed,
         }
 
     with mlflow.start_run(run_name=f"{model_type}_run") as run:
         mlflow.set_tag("model_type", model_type)
         mlflow.set_tag("dataset_version", settings.dataset_name)
-        mlflow.set_tag("split_strategy", "temporal")
+        mlflow.set_tag("split_strategy", "random_80_20")
 
-        # Log hyperparameters
         mlflow.log_params(hyperparams if hyperparams else {"model_type": model_type})
 
-        # Train and evaluate
         start = time.time()
-        model, metrics = train_and_evaluate(model_type=model_type, hyperparams=hyperparams)
+        model, metrics, bundle = train_and_evaluate(model_type=model_type)
         train_time = time.time() - start
 
-        # Log metrics
         mlflow.log_metrics(metrics)
         mlflow.log_metric("training_time_seconds", train_time)
 
-        # Save and log model artifact
+        # --- Lưu artifact ----------------------------------------------------
         artifacts_dir = settings.artifacts_dir
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-        if model_type == "als":
-            artifact = {
-                "model_type": model_type,
-                "user_factors": model.user_factors,
-                "item_factors": model.item_factors,
-                "n_users": model.user_factors.shape[0],
-                "n_items": model.item_factors.shape[0],
-                "hyperparams": hyperparams,
-                "metrics": metrics,
-                "model_version": settings.model_version,
-            }
-        elif model_type == "content_based":
-            item_features = model.item_features
-            user_profiles = model.user_profiles
-            artifact = {
-                "model_type": model_type,
-                "item_features": item_features,
-                "user_profiles": user_profiles,
-                "n_users": user_profiles.shape[0] if user_profiles is not None else 0,
-                "n_items": item_features.shape[0] if item_features is not None else 0,
-                "hyperparams": hyperparams,
-                "metrics": metrics,
-                "model_version": settings.model_version,
-            }
-        else:
-            artifact = {
-                "model_type": model_type,
-                "metrics": metrics,
-                "model_version": settings.model_version,
-            }
+        artifact = _build_artifact(model_type, model, bundle, metrics, hyperparams)
 
         model_path = artifacts_dir / "model.pkl"
         joblib.dump(artifact, model_path)
         mlflow.log_artifact(str(model_path))
 
-        # Write sibling metadata so the API can report which model it serves.
+        # Metadata nhẹ để /health của API đọc nhanh không cần load model.
         meta = {
             "model_type": model_type,
             "model_version": settings.model_version,
@@ -208,32 +253,29 @@ def run_training_pipeline(model_type: str = "als") -> None:
         mlflow.log_artifact(str(meta_path))
 
         log.info(
-            "Training complete. Run ID: %s, Metrics: %s",
+            "Training xong. Run ID: %s, metrics: %s",
             run.info.run_id,
             metrics,
         )
 
-    log.info("Model saved to %s (meta: %s)", model_path, meta_path)
+    log.info("Saved artifact %s (meta: %s)", model_path, meta_path)
 
 
 def main() -> None:
-    """Entry point for training."""
+    """CLI entry point."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Train recommendation model")
+    parser = argparse.ArgumentParser(description="Train LightFM recommendation model")
     parser.add_argument(
         "--model",
         type=str,
-        default="als",
-        choices=["random", "popular", "als", "content_based"],
-        help="Model type to train",
+        default="lightfm",
+        choices=["lightfm", "popular", "random"],
+        help="Model type to train (lightfm là model chính; baselines chỉ để smoke-test)",
     )
     args = parser.parse_args()
-
     run_training_pipeline(model_type=args.model)
 
 

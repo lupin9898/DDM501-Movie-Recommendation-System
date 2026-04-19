@@ -19,13 +19,13 @@ data:  ## Download + preprocess MovieLens data
 	python -m src.data.ingestion
 	python -m src.data.preprocessing
 
-train:  ## Train ALS model (logs to MLflow)
-	python -m src.training.train --model als
+train:  ## Train LightFM hybrid model (logs to MLflow)
+	python -m src.training.train --model lightfm
 
-train-all:  ## Train all model types (random, popular, als)
+train-all:  ## Train all model types (random, popular, lightfm)
 	python -m src.training.train --model random
 	python -m src.training.train --model popular
-	python -m src.training.train --model als
+	python -m src.training.train --model lightfm
 
 # ── API ──────────────────────────────────────────────────────────────────────
 serve:  ## Run API locally with hot reload (uvicorn)
@@ -72,7 +72,7 @@ health:  ## Curl /health on every HTTP service
 	@echo
 
 train-and-reload:  ## Train locally then restart API to pick up new model
-	python -m src.training.train --model als
+	python -m src.training.train --model lightfm
 	$(COMPOSE) restart api
 	@echo "API restarted — check /health for new model_version"
 

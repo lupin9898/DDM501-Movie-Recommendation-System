@@ -98,7 +98,7 @@ with DAG(
 
     train_model = BashOperator(
         task_id="train_model",
-        bash_command="cd /opt/airflow && python -m src.training.train --model als",
+        bash_command="cd /opt/airflow && python -m src.training.train --model lightfm",
         trigger_rule="none_failed_min_one_success",
     )
 

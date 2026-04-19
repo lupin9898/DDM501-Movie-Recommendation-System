@@ -71,7 +71,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
 
 app = FastAPI(
     title="Movie Recommendation API",
-    description="Real-time movie recommendations powered by ALS collaborative filtering",
+    description="Real-time movie recommendations powered by LightFM hybrid (WARP loss)",
     version=settings.model_version,
     lifespan=lifespan,
 )

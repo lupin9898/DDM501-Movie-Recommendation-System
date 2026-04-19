@@ -20,50 +20,80 @@ from fastapi.testclient import TestClient
 
 
 def _make_fake_artifact(tmp_path: Path) -> dict[str, Any]:
-    """Write a minimal model and supporting Parquet artifacts to tmp_path.
+    """Tạo artifact LightFM nhỏ để ``RecommenderService.load`` chạy đúng flow thật.
 
-    Schema mirrors what ``src.training.train`` produces so RecommenderService
-    loads through the real code paths (not the identity-mapping fallback).
+    Dùng LightFM thật với epochs=1, no_components=4 để pytest nhanh nhưng
+    serving layer vẫn đi qua đường ``model.predict`` chuẩn.
     """
+    from lightfm import LightFM
+
     rng = np.random.default_rng(0)
-    n_users, n_items, n_factors = 10, 20, 8
+    n_users, n_items, n_genres, n_components = 10, 20, 3, 4
+
+    # Ma trận tương tác giả lập — mỗi user tương tác với 3 item đầu của mình.
+    rows = np.repeat(np.arange(n_users), 3)
+    cols = np.concatenate([(u, (u + 1) % n_items, (u + 2) % n_items) for u in range(n_users)])
+    data = np.ones(len(rows), dtype=np.float32)
+    from scipy.sparse import coo_matrix
+
+    interactions = coo_matrix((data, (rows, cols)), shape=(n_users, n_items)).tocsr()
+
+    # Item features: mỗi phim gắn ngẫu nhiên 1 trong 3 genre.
+    genre_rows = np.arange(n_items)
+    genre_cols = rng.integers(0, n_genres, size=n_items)
+    item_features = coo_matrix(
+        (np.ones(n_items, dtype=np.float32), (genre_rows, genre_cols)),
+        shape=(n_items, n_genres),
+    ).tocsr()
+
+    lightfm_model = LightFM(
+        no_components=n_components,
+        loss="warp",
+        learning_rate=0.05,
+        random_state=0,
+    )
+    lightfm_model.fit(interactions, item_features=item_features, epochs=1, num_threads=1)
+
+    _, item_embeddings = lightfm_model.get_item_representations(features=item_features)
+
+    # user_seen từ interactions.
+    csr = interactions.tocsr()
+    user_seen = {
+        int(u): {int(i) for i in csr.indices[csr.indptr[u] : csr.indptr[u + 1]]}
+        for u in range(n_users)
+    }
+
+    movies_df = pd.DataFrame(
+        {
+            "movieId": list(range(n_items)),
+            "title": [f"Movie {i}" for i in range(n_items)],
+            "genres": ["Action|Drama"] * n_items,
+        }
+    )
 
     artifact: dict[str, Any] = {
-        "model_type": "als",
-        "user_factors": rng.random((n_users, n_factors)).astype(np.float32),
-        "item_factors": rng.random((n_items, n_factors)).astype(np.float32),
+        "model_type": "lightfm",
+        "model": lightfm_model,
+        "item_features": item_features,
+        "item_embeddings": np.asarray(item_embeddings),
+        "user_id_map": {i: i for i in range(n_users)},
+        "item_id_map": {i: i for i in range(n_items)},
+        "reverse_item_id_map": {i: i for i in range(n_items)},
+        "reverse_user_id_map": {i: i for i in range(n_users)},
+        "user_seen": user_seen,
+        "movies": movies_df,
         "n_users": n_users,
         "n_items": n_items,
-        "model_version": "als_test_v1",
-        "hyperparams": {},
+        "model_version": "lightfm_test_v1",
+        "hyperparams": {"no_components": n_components},
         "metrics": {},
+        "num_threads": 1,
     }
 
     joblib.dump(artifact, tmp_path / "model.pkl")
 
-    pd.DataFrame({"original_id": range(n_users), "encoded_id": range(n_users)}).to_parquet(
-        tmp_path / "user_id_map.parquet", index=False
-    )
-
-    pd.DataFrame({"original_id": range(n_items), "encoded_id": range(n_items)}).to_parquet(
-        tmp_path / "movie_id_map.parquet", index=False
-    )
-
-    pd.DataFrame(
-        {
-            "movieId": range(n_items),
-            "title": [f"Movie {i}" for i in range(n_items)],
-            "genres": ["Action|Drama"] * n_items,
-        }
-    ).to_parquet(tmp_path / "movies.parquet", index=False)
-
-    # Train log so RecommenderService can build user_seen_items from it.
-    pd.DataFrame(
-        {
-            "user_idx": list(range(n_users)),
-            "movie_idx": list(range(n_users)),
-        }
-    ).to_parquet(tmp_path / "train.parquet", index=False)
+    # Giữ ``movies.parquet`` phòng trường hợp RecommenderService fallback sang disk.
+    movies_df.to_parquet(tmp_path / "movies.parquet", index=False)
 
     return artifact
 
@@ -79,7 +109,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     with (
         patch.object(settings, "model_path", tmp_path / "model.pkl"),
         patch.object(settings, "data_processed_dir", tmp_path),
-        patch.object(settings, "model_version", "als_test_v1"),
+        patch.object(settings, "model_version", "lightfm_test_v1"),
         patch.object(settings, "top_k", 10),
         patch.object(settings, "implicit_threshold", 3.5),
         TestClient(app_module.app, raise_server_exceptions=True) as c,

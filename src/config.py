@@ -22,15 +22,18 @@ class Settings(BaseSettings):
 
     # Model
     model_path: Path = Path(__file__).resolve().parent.parent / "artifacts" / "model.pkl"
-    model_version: str = "als_v1"
+    model_version: str = "lightfm_v1"
     top_k: int = 10
     implicit_threshold: float = 3.0
 
-    # ALS defaults
-    als_factors: int = 200
-    als_regularization: float = 0.01
-    als_iterations: int = 50
-    als_alpha: float = 100.0
+    # LightFM hybrid defaults — theo yêu cầu người dùng.
+    lightfm_no_components: int = 64
+    lightfm_loss: str = "warp"
+    lightfm_learning_rate: float = 0.05
+    lightfm_epochs: int = 30
+    lightfm_num_threads: int = 4
+    lightfm_test_size: float = 0.2
+    lightfm_split_seed: int = 42
 
     # MLflow
     mlflow_tracking_uri: str = "sqlite:///mlflow.db"
