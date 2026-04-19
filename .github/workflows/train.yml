@@ -63,15 +63,14 @@ jobs:
           echo "PYTHON=$PY" >> $GITHUB_ENV
 
       # ── Set persistent host paths (shared with docker bind mounts) ───────
-      # Raw data comes from the repo's data/raw/ (ml-latest-small, ~100K ratings).
-      # Artifacts go to a persistent host dir that the API container bind-mounts.
+      # $GITHUB_WORKSPACE is stable on self-hosted runners and matches the path
+      # the docker-compose API service bind-mounts (${RECSYS_ARTIFACTS_DIR:-./artifacts}).
       - name: Set persistent data paths
         run: |
-          ARTIFACTS_DIR="${RECSYS_ARTIFACTS_DIR_HOST:-$HOME/recsys-artifacts}"
-          mkdir -p "$GITHUB_WORKSPACE/data/processed" "$ARTIFACTS_DIR"
+          mkdir -p "$GITHUB_WORKSPACE/data/processed" "$GITHUB_WORKSPACE/artifacts"
           echo "RECSYS_DATA_RAW_DIR=$GITHUB_WORKSPACE/data/raw"             >> $GITHUB_ENV
           echo "RECSYS_DATA_PROCESSED_DIR=$GITHUB_WORKSPACE/data/processed" >> $GITHUB_ENV
-          echo "RECSYS_ARTIFACTS_DIR=$ARTIFACTS_DIR"                        >> $GITHUB_ENV
+          echo "RECSYS_ARTIFACTS_DIR=$GITHUB_WORKSPACE/artifacts"           >> $GITHUB_ENV
           echo "GIT_SHA=${{ github.sha }}"                                  >> $GITHUB_ENV
 
       # ── Preprocess ───────────────────────────────────────────────────────
