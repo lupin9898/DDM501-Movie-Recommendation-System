@@ -197,7 +197,7 @@ class RecommenderService:
         return {
             "movie_id": movie_id,
             "title": str(meta.get("title", f"Movie {movie_id}")),
-            "score": round(float(score), 6),
+            "score": round(float(1.0 / (1.0 + np.exp(-score))), 4),
             "genres": list(meta.get("genres", [])),
         }
 
