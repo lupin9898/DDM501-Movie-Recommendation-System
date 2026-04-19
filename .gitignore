@@ -12,11 +12,13 @@ build/
 venv/
 env/
 
-# Data files (too large for git)
-data/raw/
+# Data files
 data/processed/
-*.csv
 *.parquet
+
+# Large raw datasets (keep ml-latest-small committed; ignore full 25M dataset files)
+data/raw/genome-*.csv
+data/raw/links.csv
 
 # Model artifacts
 artifacts/
